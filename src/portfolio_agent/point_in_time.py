@@ -27,7 +27,7 @@ def latest_available_fundamentals(
     if frame.empty:
         return frame
 
-    frame = frame.sort_values(["ticker", "available_at", "period_end"])
+    frame = frame.sort_values(["ticker", "period_end", "available_at"])
     return frame.groupby("ticker", as_index=False).tail(1).reset_index(drop=True)
 
 
@@ -91,8 +91,11 @@ def compute_yoy_growth(
             continue
 
         period_diffs = (prior_visible["period_end"] - prior_end).abs()
-        closest_idx = period_diffs.idxmin()
-        prior_revenue = prior_visible.loc[closest_idx, "revenue"]
+        min_diff = period_diffs.min()
+        closest_rows = prior_visible[period_diffs == min_diff]
+        if "available_at" in closest_rows.columns:
+            closest_rows = closest_rows.sort_values("available_at")
+        prior_revenue = closest_rows.iloc[-1]["revenue"]
 
         if pd.isna(prior_revenue) or prior_revenue == 0:
             result[ticker] = None

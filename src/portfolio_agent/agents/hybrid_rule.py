@@ -64,8 +64,8 @@ class HybridRuleAgent(BaseAgent):
         self._step_count += 1
 
         if (
-            self._step_count % self.rebalance_frequency != 1
-            and self._step_count > 1
+            self.rebalance_frequency > 1
+            and (self._step_count - 1) % self.rebalance_frequency != 0
             and self._last_weights
         ):
             return dict(self._last_weights)

@@ -1,5 +1,4 @@
-# trading_competition_baseline
-> Walk-Forward Portfolio Agent Evaluation System
+# Walk-Forward Portfolio Agent Evaluation System
 
 A reproducible, confidentiality-enforced evaluation framework for
 portfolio-allocation agents. On each trading step the evaluator supplies a

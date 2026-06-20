@@ -217,6 +217,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Project-specific: generated artifacts and private data
 models/
 private_audit/
 results/
+rl_training_data/
+stock_data_1y/

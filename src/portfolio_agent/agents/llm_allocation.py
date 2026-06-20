@@ -13,8 +13,6 @@ import math
 import re
 from typing import Any
 
-import requests
-
 from .base import BaseAgent
 
 logger = logging.getLogger(__name__)
@@ -152,9 +150,11 @@ def _extract_json_block(text: str) -> str | None:
 def _parse_llm_response(text: str) -> dict[str, float]:
     text = text.strip()
 
-    code_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    code_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
     if code_match:
-        text = code_match.group(1).strip()
+        inner = code_match.group(1).strip()
+        if inner.startswith("{"):
+            text = inner
 
     parsed = None
     try:
@@ -266,8 +266,8 @@ class LLMAllocationAgent(BaseAgent):
         self._step_count += 1
 
         if (
-            self._step_count % self.rebalance_frequency != 1
-            and self._step_count > 1
+            self.rebalance_frequency > 1
+            and (self._step_count - 1) % self.rebalance_frequency != 0
             and self._last_weights
         ):
             return dict(self._last_weights)

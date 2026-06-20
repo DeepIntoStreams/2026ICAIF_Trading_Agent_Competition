@@ -10,6 +10,7 @@ import numpy as np
 
 def compute_metrics(
     nav: Sequence[float],
+    initial_capital: float | None = None,
     total_transaction_cost: float = 0.0,
     total_trade_value: float = 0.0,
     violation_steps: int = 0,
@@ -32,11 +33,8 @@ def compute_metrics(
     if volatility > 0:
         sharpe = math.sqrt(annualization) * mean_return / volatility
 
-    downside = returns[returns < 0]
-    if len(downside) > 1:
-        downside_std = float(np.std(downside, ddof=1))
-    else:
-        downside_std = 0.0
+    downside_returns = np.minimum(returns, 0.0)
+    downside_std = float(np.sqrt(np.mean(downside_returns ** 2))) if n > 0 else 0.0
     sortino = 0.0
     if downside_std > 0:
         sortino = math.sqrt(annualization) * mean_return / downside_std
@@ -49,6 +47,7 @@ def compute_metrics(
     if max_drawdown < 0:
         calmar = annualized_return / abs(max_drawdown)
 
+    cost_base = initial_capital if initial_capital is not None else values[0]
     average_nav = float(np.mean(values))
     decision_steps = n if decision_steps is None else decision_steps
 
@@ -60,7 +59,7 @@ def compute_metrics(
         "sortino": float(sortino),
         "max_drawdown": max_drawdown,
         "calmar": calmar,
-        "cost_rate": float(total_transaction_cost / values[0]),
+        "cost_rate": float(total_transaction_cost / cost_base) if cost_base > 0 else 0.0,
         "turnover": float(total_trade_value / average_nav) if average_nav > 0 else 0.0,
         "violation_rate": 0.0 if decision_steps == 0 else float(violation_steps / decision_steps),
     }

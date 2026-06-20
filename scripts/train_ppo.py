@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from portfolio_agent.agents.ppo_portfolio import (
     FEATURE_DIM,
+    FRESHNESS_FEATURES,
     FUNDAMENTAL_FEATURES,
     MARKET_FEATURES,
     PortfolioPolicy,
@@ -153,6 +154,8 @@ class PortfolioEnv:
                     else:
                         row.append(0.0)
                 for _ in FUNDAMENTAL_FEATURES:
+                    row.append(0.0)
+                for _ in FRESHNESS_FEATURES:
                     row.append(0.0)
                 row.append(weights[i])
                 feat_rows.append(row)

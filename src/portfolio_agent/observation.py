@@ -117,7 +117,12 @@ def compute_fundamental_features(
     period_end = fundamentals_row.get("period_end")
 
     age_days = None
-    if period_end is not None and cutoff_date is not None:
+    if available_at is not None and cutoff_date is not None:
+        try:
+            age_days = (pd.Timestamp(cutoff_date) - pd.Timestamp(available_at)).days
+        except Exception:
+            pass
+    elif period_end is not None and cutoff_date is not None:
         try:
             age_days = (pd.Timestamp(cutoff_date) - pd.Timestamp(period_end)).days
         except Exception:

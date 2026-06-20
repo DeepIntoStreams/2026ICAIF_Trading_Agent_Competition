@@ -11,6 +11,7 @@ every asset passes through the same shared encoder.
 
 from __future__ import annotations
 
+import logging
 import math
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .base import BaseAgent
+
+logger = logging.getLogger(__name__)
 
 MARKET_FEATURES = [
     "return_1d",
@@ -39,7 +42,12 @@ FUNDAMENTAL_FEATURES = [
     "roe",
 ]
 
-FEATURE_DIM = len(MARKET_FEATURES) + len(FUNDAMENTAL_FEATURES) + 1  # +1 for current weight
+FRESHNESS_FEATURES = [
+    "report_age_days",
+]
+
+# 7 market + 4 fundamental + 1 freshness + 1 current weight = 13
+FEATURE_DIM = len(MARKET_FEATURES) + len(FUNDAMENTAL_FEATURES) + len(FRESHNESS_FEATURES) + 1
 
 
 class PortfolioPolicy(nn.Module):
@@ -152,6 +160,13 @@ def observation_to_tensor(
             val = ff.get(key)
             row.append(0.0 if val is None or not math.isfinite(val) else val)
 
+        for key in FRESHNESS_FEATURES:
+            val = ff.get(key)
+            scaled = 0.0
+            if val is not None and math.isfinite(val):
+                scaled = val / 365.0
+            row.append(scaled)
+
         w = weights.get(aid, 0.0)
         row.append(w if math.isfinite(w) else 0.0)
 
@@ -189,6 +204,10 @@ class PPOPortfolioAgent(BaseAgent):
                 else:
                     self.policy.load_state_dict(state)
                 self.policy.eval()
+            else:
+                logger.warning(
+                    "PPO checkpoint not found at %s — using random weights", ckpt_path
+                )
 
         self._asset_order: list[str] | None = None
 

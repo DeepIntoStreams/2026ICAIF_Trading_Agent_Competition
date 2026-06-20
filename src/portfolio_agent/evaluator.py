@@ -251,6 +251,9 @@ class WalkForwardEvaluator:
         total_cost = 0.0
         total_trade_value = 0.0
         violation_step_count = 0
+        eval_cost = 0.0
+        eval_trade_value = 0.0
+        eval_violation_step_count = 0
         prev_fundamentals: dict[str, Any] = {}
 
         for step in range(total_steps):
@@ -277,7 +280,6 @@ class WalkForwardEvaluator:
                             nav_open += shares[ticker] * cl
                             opens[ticker] = cl
 
-                sell_value = 0.0
                 buy_orders: list[tuple[str, float]] = []
 
                 for ticker in self.tickers:
@@ -295,7 +297,6 @@ class WalkForwardEvaluator:
                         cash += trade_val - fee
                         total_cost += fee
                         total_trade_value += trade_val
-                        sell_value += trade_val
                         step_fees += fee
                         step_trade_val += trade_val
                         old_shares = shares[ticker]
@@ -357,8 +358,12 @@ class WalkForwardEvaluator:
                             "buy_scale": scale,
                         })
 
-                if cash < -1e-6:
+                if cash < 0:
                     cash = 0.0
+
+                if not is_pre_roll:
+                    eval_cost += step_fees
+                    eval_trade_value += step_trade_val
 
                 if audit and step_trades:
                     audit.write({
@@ -482,7 +487,7 @@ class WalkForwardEvaluator:
                 raw_action = agent.decide(obs)
             except Exception as e:
                 logger.warning("Agent error at step %d: %s", step, e)
-                raw_action = {}
+                raw_action = pending_weights if pending_weights is not None else {}
                 all_violations.append({
                     "step": step,
                     "type": "invalid_action",
@@ -498,6 +503,8 @@ class WalkForwardEvaluator:
 
             if violations:
                 violation_step_count += 1
+                if not is_pre_roll:
+                    eval_violation_step_count += 1
                 for v in violations:
                     all_violations.append({"step": step, "type": v})
 
@@ -528,9 +535,10 @@ class WalkForwardEvaluator:
         eval_steps = len(eval_nav) - 1
         metrics = compute_metrics(
             nav=eval_nav,
-            total_transaction_cost=total_cost,
-            total_trade_value=total_trade_value,
-            violation_steps=violation_step_count,
+            initial_capital=self.initial_cash,
+            total_transaction_cost=eval_cost,
+            total_trade_value=eval_trade_value,
+            violation_steps=eval_violation_step_count,
             decision_steps=eval_steps,
         )
 
@@ -544,20 +552,26 @@ class WalkForwardEvaluator:
             "eval_steps": eval_steps,
         }
 
-        if audit:
-            audit.write({
-                "event": "evaluation_end",
-                "timestamp": datetime.now().isoformat(),
-                "total_steps": total_steps,
-                "eval_steps": eval_steps,
-                "pre_roll_days": self.pre_roll_days,
-                "total_transaction_cost": total_cost,
-                "total_trade_value": total_trade_value,
-                "violation_steps": violation_step_count,
-                "metrics": metrics,
-            })
-            audit.close()
-            logger.info("Audit log saved to %s", audit.path)
+        try:
+            if audit:
+                audit.write({
+                    "event": "evaluation_end",
+                    "timestamp": datetime.now().isoformat(),
+                    "total_steps": total_steps,
+                    "eval_steps": eval_steps,
+                    "pre_roll_days": self.pre_roll_days,
+                    "total_transaction_cost": total_cost,
+                    "eval_transaction_cost": eval_cost,
+                    "total_trade_value": total_trade_value,
+                    "eval_trade_value": eval_trade_value,
+                    "violation_steps": violation_step_count,
+                    "eval_violation_steps": eval_violation_step_count,
+                    "metrics": metrics,
+                })
+        finally:
+            if audit:
+                audit.close()
+                logger.info("Audit log saved to %s", audit.path)
 
         if output_dir is not None:
             self._save_outputs(result, Path(output_dir))
