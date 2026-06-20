@@ -255,6 +255,8 @@ class WalkForwardEvaluator:
 
         for step in range(total_steps):
             step_date = str(self._get_date(step).date())
+            is_pre_roll = step < self.pre_roll_days
+            eval_phase = "pre_roll" if is_pre_roll else "evaluation"
 
             # --- 1. Execute pending weights at open ---
             step_trades: list[dict[str, Any]] = []
@@ -363,6 +365,7 @@ class WalkForwardEvaluator:
                         "event": "step",
                         "step": step,
                         "phase": "execution",
+                        "eval_phase": eval_phase,
                         "date": step_date,
                         "nav_open": nav_open,
                         "num_trades": len(step_trades),
@@ -423,6 +426,7 @@ class WalkForwardEvaluator:
                     "event": "step",
                     "step": step,
                     "phase": "mark_close",
+                    "eval_phase": eval_phase,
                     "date": step_date,
                     "nav": nav_close,
                     "cash": cash,
@@ -467,6 +471,7 @@ class WalkForwardEvaluator:
                     "event": "step",
                     "step": step,
                     "phase": "observation_sent",
+                    "eval_phase": eval_phase,
                     "num_assets_with_market": mkt_count,
                     "num_assets_with_fundamentals": fund_count,
                 })
@@ -501,6 +506,7 @@ class WalkForwardEvaluator:
                     "event": "step",
                     "step": step,
                     "phase": "agent_action",
+                    "eval_phase": eval_phase,
                     "raw_action": raw_action,
                     "sanitized_action": sanitized,
                     "violations": violations,
