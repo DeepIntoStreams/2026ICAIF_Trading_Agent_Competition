@@ -199,11 +199,19 @@ class PPOPortfolioAgent(BaseAgent):
             ckpt_path = Path(checkpoint_path)
             if ckpt_path.exists():
                 state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-                if "policy_state_dict" in state:
-                    self.policy.load_state_dict(state["policy_state_dict"])
-                else:
-                    self.policy.load_state_dict(state)
-                self.policy.eval()
+                try:
+                    if "policy_state_dict" in state:
+                        self.policy.load_state_dict(state["policy_state_dict"])
+                    else:
+                        self.policy.load_state_dict(state)
+                    self.policy.eval()
+                except RuntimeError as e:
+                    ckpt_dim = state.get("feature_dim", "unknown")
+                    logger.error(
+                        "Failed to load checkpoint %s (feature_dim=%s, "
+                        "expected=%d): %s — using random weights",
+                        ckpt_path, ckpt_dim, feature_dim, e,
+                    )
             else:
                 logger.warning(
                     "PPO checkpoint not found at %s — using random weights", ckpt_path

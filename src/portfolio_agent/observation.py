@@ -116,17 +116,19 @@ def compute_fundamental_features(
     available_at = fundamentals_row.get("available_at")
     period_end = fundamentals_row.get("period_end")
 
+    def _tz_naive(ts: Any) -> pd.Timestamp | None:
+        try:
+            t = pd.Timestamp(ts)
+            return t.tz_localize(None) if t.tzinfo is not None else t
+        except Exception:
+            return None
+
     age_days = None
-    if available_at is not None and cutoff_date is not None:
-        try:
-            age_days = (pd.Timestamp(cutoff_date) - pd.Timestamp(available_at)).days
-        except Exception:
-            pass
-    elif period_end is not None and cutoff_date is not None:
-        try:
-            age_days = (pd.Timestamp(cutoff_date) - pd.Timestamp(period_end)).days
-        except Exception:
-            pass
+    cutoff_ts = _tz_naive(cutoff_date)
+    if cutoff_ts is not None:
+        ref_ts = _tz_naive(available_at) or _tz_naive(period_end)
+        if ref_ts is not None:
+            age_days = (cutoff_ts - ref_ts).days
 
     is_new = False
     if available_at is not None and previous_available_at is not None:

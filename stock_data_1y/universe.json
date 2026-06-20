@@ -1,0 +1,44 @@
+{
+  "technology": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "INTC",
+    "CRM"
+  ],
+  "finance": [
+    "JPM",
+    "BAC",
+    "GS",
+    "V",
+    "PYPL"
+  ],
+  "healthcare": [
+    "LLY",
+    "JNJ",
+    "UNH",
+    "PFE",
+    "TMO"
+  ],
+  "consumer": [
+    "AMZN",
+    "TSLA",
+    "WMT",
+    "NKE",
+    "KO"
+  ],
+  "industrial_energy": [
+    "CAT",
+    "GE",
+    "BA",
+    "XOM",
+    "CVX"
+  ],
+  "communication_utilities": [
+    "GOOGL",
+    "META",
+    "DIS",
+    "T",
+    "NEE"
+  ]
+}

@@ -52,13 +52,20 @@ class _AuditLog:
         self._path = log_dir / f"audit_{ts}.jsonl"
         self._file = open(self._path, "w", encoding="utf-8")
 
+    def __enter__(self) -> "_AuditLog":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
     def write(self, event: dict[str, Any]) -> None:
         line = json.dumps(event, default=str, ensure_ascii=False)
         self._file.write(line + "\n")
         self._file.flush()
 
     def close(self) -> None:
-        self._file.close()
+        if not self._file.closed:
+            self._file.close()
 
     @property
     def path(self) -> Path:
@@ -228,6 +235,22 @@ class WalkForwardEvaluator:
         audit: _AuditLog | None = None
         if audit_dir is not None:
             audit = _AuditLog(Path(audit_dir))
+
+        try:
+            return self._run_inner(agent, audit, total_steps, output_dir)
+        finally:
+            if audit:
+                audit.close()
+                logger.info("Audit log saved to %s", audit.path)
+
+    def _run_inner(
+        self,
+        agent: Agent,
+        audit: _AuditLog | None,
+        total_steps: int,
+        output_dir: str | Path | None,
+    ) -> dict[str, Any]:
+        if audit:
             audit.write({
                 "event": "evaluation_start",
                 "timestamp": datetime.now().isoformat(),
@@ -552,26 +575,21 @@ class WalkForwardEvaluator:
             "eval_steps": eval_steps,
         }
 
-        try:
-            if audit:
-                audit.write({
-                    "event": "evaluation_end",
-                    "timestamp": datetime.now().isoformat(),
-                    "total_steps": total_steps,
-                    "eval_steps": eval_steps,
-                    "pre_roll_days": self.pre_roll_days,
-                    "total_transaction_cost": total_cost,
-                    "eval_transaction_cost": eval_cost,
-                    "total_trade_value": total_trade_value,
-                    "eval_trade_value": eval_trade_value,
-                    "violation_steps": violation_step_count,
-                    "eval_violation_steps": eval_violation_step_count,
-                    "metrics": metrics,
-                })
-        finally:
-            if audit:
-                audit.close()
-                logger.info("Audit log saved to %s", audit.path)
+        if audit:
+            audit.write({
+                "event": "evaluation_end",
+                "timestamp": datetime.now().isoformat(),
+                "total_steps": total_steps,
+                "eval_steps": eval_steps,
+                "pre_roll_days": self.pre_roll_days,
+                "total_transaction_cost": total_cost,
+                "eval_transaction_cost": eval_cost,
+                "total_trade_value": total_trade_value,
+                "eval_trade_value": eval_trade_value,
+                "violation_steps": violation_step_count,
+                "eval_violation_steps": eval_violation_step_count,
+                "metrics": metrics,
+            })
 
         if output_dir is not None:
             self._save_outputs(result, Path(output_dir))
