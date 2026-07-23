@@ -34,11 +34,13 @@ No markdown. No explanation. No arrays. Just the JSON object above.\
 
 
 def _summarize_asset(
-    aid: str,
+    asset_id: str,
+    company_name: str,
     mf: dict[str, Any],
     ff: dict[str, Any],
     current_weight: float,
     rank: int,
+    news_items: list[dict[str, Any]],
 ) -> str:
     """One compact line per asset for the LLM prompt."""
     def fmt(v: Any, pct: bool = False) -> str:
@@ -49,7 +51,7 @@ def _summarize_asset(
         return f"{v:.3f}"
 
     parts = [
-        f"#{rank} {aid}",
+        f"#{rank} {asset_id} ({company_name})",
         f"mom20={fmt(mf.get('return_20d'), True)}",
         f"mom60={fmt(mf.get('momentum_60d'), True)}",
         f"trend={fmt(mf.get('sma_distance_50'), True)}",
@@ -61,7 +63,34 @@ def _summarize_asset(
         f"age={ff.get('report_age_days', 'n/a')}d",
         f"w={current_weight:.3f}",
     ]
+    for item in news_items[:3]:
+        headline = str(item.get("headline", "")).strip()
+        summary = str(item.get("summary", "")).strip()
+        if summary:
+            parts.append(f"news={headline} :: {summary}")
+        elif headline:
+            parts.append(f"news={headline}")
     return " | ".join(parts)
+
+
+def _asset_metadata(observation: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    assets = observation.get("assets", [])
+    if assets:
+        return {str(item["ticker"]): dict(item) for item in assets}
+    return {
+        str(asset_id): {"ticker": str(asset_id), "company_name": str(asset_id)}
+        for asset_id in observation.get("market_features", {})
+    }
+
+
+def _news_by_ticker(observation: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in observation.get("news", []):
+        ticker = item.get("ticker")
+        tickers = item.get("tickers") or ([ticker] if ticker else [])
+        for asset_id in tickers:
+            grouped.setdefault(str(asset_id), []).append(dict(item))
+    return grouped
 
 
 def _build_user_prompt(observation: dict[str, Any]) -> str:
@@ -70,8 +99,12 @@ def _build_user_prompt(observation: dict[str, Any]) -> str:
     portfolio = observation.get("portfolio", {})
     weights = portfolio.get("weights", {})
     constraints = observation.get("constraints", {})
+    metadata = _asset_metadata(observation)
+    news_lookup = _news_by_ticker(observation)
 
-    asset_ids = sorted(market.keys())
+    asset_ids = [asset_id for asset_id in metadata if asset_id in market]
+    if not asset_ids:
+        asset_ids = sorted(market.keys())
 
     scores: list[tuple[str, float]] = []
     for aid in asset_ids:
@@ -100,7 +133,18 @@ def _build_user_prompt(observation: dict[str, Any]) -> str:
         mf = market.get(aid, {})
         ff = fund.get(aid, {})
         w = weights.get(aid, 0.0)
-        lines.append(_summarize_asset(aid, mf, ff, w, rank))
+        company_name = str(metadata.get(aid, {}).get("company_name", aid))
+        lines.append(
+            _summarize_asset(
+                aid,
+                company_name,
+                mf,
+                ff,
+                w,
+                rank,
+                news_lookup.get(aid, []),
+            )
+        )
 
     return "\n".join(lines)
 
@@ -221,10 +265,11 @@ def _call_llm(
     user_prompt: str,
     temperature: float = 0.0,
     max_tokens: int = 4096,
+    timeout_seconds: float = 60.0,
 ) -> str:
     """Call LLM via OpenAI-compatible chat completions API."""
     from openai import OpenAI
-    client = OpenAI(base_url=base_url, api_key=api_key)
+    client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout_seconds)
     response = client.chat.completions.create(
         model=model,
         messages=[
@@ -243,11 +288,13 @@ class LLMAllocationAgent(BaseAgent):
     def __init__(
         self,
         model_name: str = "google/gemma-4-31B-it",
-        base_url: str = "http://10.86.229.182:8000/v1",
+        base_url: str = "http://localhost:8000/v1",
         api_key: str = "unused",
         temperature: float = 0.0,
         rebalance_frequency: int = 5,
         max_retries: int = 2,
+        max_tokens: int = 4096,
+        timeout_seconds: float = 60.0,
     ):
         self.model_name = model_name
         self.base_url = base_url
@@ -255,6 +302,8 @@ class LLMAllocationAgent(BaseAgent):
         self.temperature = temperature
         self.rebalance_frequency = rebalance_frequency
         self.max_retries = max_retries
+        self.max_tokens = max_tokens
+        self.timeout_seconds = timeout_seconds
         self._last_weights: dict[str, float] = {}
         self._step_count = 0
 
@@ -283,6 +332,8 @@ class LLMAllocationAgent(BaseAgent):
                     system_prompt=SYSTEM_PROMPT,
                     user_prompt=user_prompt,
                     temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    timeout_seconds=self.timeout_seconds,
                 )
                 logger.info("LLM raw response (step %d): %.300s", self._step_count, text)
                 weights = _parse_llm_response(text)

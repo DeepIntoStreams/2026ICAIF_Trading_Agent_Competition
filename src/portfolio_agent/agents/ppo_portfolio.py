@@ -22,6 +22,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .base import BaseAgent
+from portfolio_agent.news.sentiment import NEGATIVE_WORDS, POSITIVE_WORDS
+from portfolio_agent.risk import sanitize_target_weights
 
 logger = logging.getLogger(__name__)
 
@@ -239,3 +241,83 @@ class PPOPortfolioAgent(BaseAgent):
                 result[aid] = float(w_np[i])
 
         return result
+
+
+def _news_stats_from_observation(
+    observation: dict[str, Any],
+    asset_order: list[str],
+) -> tuple[dict[str, float], dict[str, int]]:
+    sentiment = {asset_id: 0.0 for asset_id in asset_order}
+    counts = {asset_id: 0 for asset_id in asset_order}
+
+    for item in observation.get("news", []):
+        ticker = item.get("ticker")
+        tickers = item.get("tickers") or ([ticker] if ticker else [])
+        text = f"{item.get('headline', '')} {item.get('summary', '')}".lower()
+        words = [part.strip(".,;:!?()[]{}\"'").lower() for part in text.split()]
+        score = (
+            sum(1 for word in words if word in POSITIVE_WORDS)
+            - sum(1 for word in words if word in NEGATIVE_WORDS)
+        )
+        for asset_id in tickers:
+            if asset_id in sentiment:
+                sentiment[asset_id] += score
+                counts[asset_id] += 1
+
+    for asset_id in asset_order:
+        if counts[asset_id] > 0:
+            sentiment[asset_id] /= counts[asset_id]
+    return sentiment, counts
+
+
+class NewsTiltedPPOAgent(PPOPortfolioAgent):
+    """PPO allocation wrapper with deterministic news tilt."""
+
+    def __init__(
+        self,
+        news_beta: float = 0.30,
+        news_count_gamma: float = 0.05,
+        **kwargs: Any,
+    ):
+        super().__init__(**kwargs)
+        self.news_beta = news_beta
+        self.news_count_gamma = news_count_gamma
+        self.last_pre_tilt_weights: dict[str, float] = {}
+        self.last_post_tilt_weights: dict[str, float] = {}
+
+    def decide(self, observation: dict[str, Any]) -> dict[str, float]:
+        base_weights = super().decide(observation)
+        asset_order = self._asset_order or sorted(
+            observation.get("market_features", {}).keys()
+        )
+        if not asset_order:
+            return {}
+
+        sentiment, counts = _news_stats_from_observation(observation, asset_order)
+        epsilon = 1e-8
+        logits = []
+        for asset_id in asset_order:
+            base_weight = base_weights.get(asset_id, 0.0)
+            logits.append(
+                math.log(base_weight + epsilon)
+                + self.news_beta * sentiment[asset_id]
+                + self.news_count_gamma * math.log(1 + counts[asset_id])
+            )
+
+        max_logit = max(logits)
+        exps = np.exp(np.array(logits) - max_logit)
+        total = float(np.sum(exps))
+        tilted = {
+            asset_id: float(exps[index] / total)
+            for index, asset_id in enumerate(asset_order)
+            if total > 0
+        }
+        sanitized, _ = sanitize_target_weights(
+            tilted,
+            allowed_assets=set(asset_order),
+            max_asset_weight=self.max_asset_weight,
+            max_gross_exposure=1.0,
+        )
+        self.last_pre_tilt_weights = dict(base_weights)
+        self.last_post_tilt_weights = dict(sanitized)
+        return sanitized

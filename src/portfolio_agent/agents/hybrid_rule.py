@@ -18,6 +18,7 @@ from typing import Any
 import numpy as np
 
 from .base import BaseAgent
+from portfolio_agent.news.sentiment import NEGATIVE_WORDS, POSITIVE_WORDS
 
 
 def _cross_sectional_zscore(values: dict[str, float | None]) -> dict[str, float]:
@@ -34,14 +35,39 @@ def _cross_sectional_zscore(values: dict[str, float | None]) -> dict[str, float]
     return result
 
 
+def _news_scores(observation: dict[str, Any], asset_ids: list[str]) -> dict[str, float]:
+    scores = {asset_id: 0.0 for asset_id in asset_ids}
+    counts = {asset_id: 0 for asset_id in asset_ids}
+
+    for item in observation.get("news", []):
+        ticker = item.get("ticker")
+        tickers = item.get("tickers") or ([ticker] if ticker else [])
+        text = f"{item.get('headline', '')} {item.get('summary', '')}".lower()
+        words = [part.strip(".,;:!?()[]{}\"'").lower() for part in text.split()]
+        raw_score = (
+            sum(1 for word in words if word in POSITIVE_WORDS)
+            - sum(1 for word in words if word in NEGATIVE_WORDS)
+        )
+        for asset_id in tickers:
+            if asset_id in scores:
+                scores[asset_id] += raw_score
+                counts[asset_id] += 1
+
+    for asset_id in scores:
+        if counts[asset_id] > 0:
+            scores[asset_id] /= counts[asset_id]
+    return scores
+
+
 class HybridRuleAgent(BaseAgent):
 
     def __init__(
         self,
         rebalance_frequency: int = 5,
         max_positions: int = 8,
-        technical_weight: float = 0.70,
-        fundamental_weight: float = 0.30,
+        technical_weight: float = 0.55,
+        fundamental_weight: float = 0.25,
+        news_weight: float = 0.20,
         momentum_short_weight: float = 0.60,
         momentum_long_weight: float = 0.40,
         max_asset_weight: float = 0.30,
@@ -50,6 +76,7 @@ class HybridRuleAgent(BaseAgent):
         self.max_positions = max_positions
         self.technical_weight = technical_weight
         self.fundamental_weight = fundamental_weight
+        self.news_weight = news_weight
         self.momentum_short_weight = momentum_short_weight
         self.momentum_long_weight = momentum_long_weight
         self.max_asset_weight = max_asset_weight
@@ -134,12 +161,26 @@ class HybridRuleAgent(BaseAgent):
 
         z_tech = _cross_sectional_zscore(tech_raw)
         z_fund = _cross_sectional_zscore(fund_raw)
+        news_raw = _news_scores(observation, asset_ids)
+        z_news = _cross_sectional_zscore(news_raw)
+
+        any_news = any(count for count in news_raw.values())
+        tech_weight = self.technical_weight
+        fund_weight = self.fundamental_weight
+        news_weight = self.news_weight if any_news else 0.0
+        if not any_news:
+            base_total = tech_weight + fund_weight
+            if base_total > 0:
+                scale = (tech_weight + fund_weight + self.news_weight) / base_total
+                tech_weight *= scale
+                fund_weight *= scale
 
         final_score: dict[str, float] = {}
         for aid in asset_ids:
             final_score[aid] = (
-                self.technical_weight * z_tech[aid]
-                + self.fundamental_weight * z_fund[aid]
+                tech_weight * z_tech[aid]
+                + fund_weight * z_fund[aid]
+                + news_weight * z_news[aid]
             )
 
         eligible: list[tuple[str, float]] = []
