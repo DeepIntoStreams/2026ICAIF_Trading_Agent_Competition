@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+from dataclasses import asdict
+from datetime import datetime, timezone
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
@@ -20,8 +21,15 @@ from .data_loader import (
     load_fundamentals,
     load_price_data,
 )
+from .config import CompetitionConfig, config_to_dict, hash_config
+from .events import MarketOpenEvent, NewsEvent
+from .execution import ExecutionEngine, PortfolioState, Trade
+from .market_calendar import select_evaluation_sessions, session_clock
 from .metrics import compute_metrics
+from .news.models import NewsRecord
+from .news.store import NewsStore
 from .observation import (
+    build_decision_observation,
     build_observation,
     compute_fundamental_features,
     compute_market_features,
@@ -611,3 +619,446 @@ class WalkForwardEvaluator:
                     f.write(json.dumps(v) + "\n")
 
         logger.info("Evaluation outputs saved to %s", output_dir)
+
+
+class DailyTradingEvaluator:
+    """Event-driven daily evaluator with point-in-time news observations."""
+
+    def __init__(
+        self,
+        data_root: str | Path | None,
+        config: CompetitionConfig,
+        news_store: NewsStore | None = None,
+        secret: bytes | None = None,
+    ):
+        if data_root is None:
+            raise ValueError("data_root is required unless using from_frames")
+
+        self.config = config
+        self.secret = secret or os.urandom(32)
+        self.news_store = news_store
+
+        sectors = load_evaluation_universe(data_root)
+        tickers = flatten_universe(sectors)
+        raw_prices = load_price_data(data_root, tickers)
+        calendar, prices = align_trading_dates(raw_prices)
+        fundamentals = load_fundamentals(data_root, tickers)
+
+        self._set_frames(
+            prices=prices,
+            fundamentals=fundamentals,
+            universe=sectors,
+            calendar=calendar,
+            news_records=None,
+        )
+
+    @classmethod
+    def from_frames(
+        cls,
+        prices: dict[str, pd.DataFrame],
+        fundamentals: pd.DataFrame,
+        universe: dict[str, list[str]],
+        config: CompetitionConfig,
+        news_records: list[NewsRecord],
+    ) -> "DailyTradingEvaluator":
+        evaluator = cls.__new__(cls)
+        evaluator.config = config
+        evaluator.secret = b"unit-test-secret"
+        evaluator.news_store = None
+        all_dates: set[pd.Timestamp] = set()
+        for frame in prices.values():
+            all_dates.update(pd.to_datetime(frame["date"]).dt.normalize().tolist())
+        evaluator._set_frames(
+            prices=prices,
+            fundamentals=fundamentals,
+            universe=universe,
+            calendar=sorted(all_dates),
+            news_records=news_records,
+        )
+        return evaluator
+
+    def _set_frames(
+        self,
+        prices: dict[str, pd.DataFrame],
+        fundamentals: pd.DataFrame,
+        universe: dict[str, list[str]],
+        calendar: list[pd.Timestamp],
+        news_records: list[NewsRecord] | None,
+    ) -> None:
+        self.prices = {
+            ticker: frame.sort_values("date").reset_index(drop=True)
+            for ticker, frame in prices.items()
+        }
+        self.fundamentals = fundamentals
+        self.universe = universe
+        self.tickers = flatten_universe(universe)
+        self.sector_map = {ticker: sector for sector, group in universe.items() for ticker in group}
+        self.calendar = sorted(pd.Timestamp(value).normalize() for value in calendar)
+        self._news_records = list(news_records or [])
+
+    def _all_news(self) -> list[NewsRecord]:
+        if self.news_store is not None:
+            return self.news_store.load_all()
+        return list(self._news_records)
+
+    def _row_for(self, ticker: str, session: pd.Timestamp) -> pd.Series | None:
+        frame = self.prices.get(ticker)
+        if frame is None or frame.empty:
+            return None
+        dates = pd.to_datetime(frame["date"]).dt.normalize()
+        matches = frame[dates == pd.Timestamp(session).normalize()]
+        if matches.empty:
+            return None
+        return matches.iloc[0]
+
+    def _position_for(self, ticker: str, session: pd.Timestamp) -> int:
+        frame = self.prices[ticker]
+        dates = pd.to_datetime(frame["date"]).dt.normalize()
+        matches = np.flatnonzero(dates == pd.Timestamp(session).normalize())
+        if len(matches) == 0:
+            raise ValueError(f"No price row for {ticker} on {session.date()}")
+        return int(matches[0])
+
+    def _open_prices(self, session: pd.Timestamp) -> dict[str, float]:
+        prices: dict[str, float] = {}
+        for ticker in self.tickers:
+            row = self._row_for(ticker, session)
+            if row is not None and pd.notna(row.get("adj_open")):
+                prices[ticker] = float(row["adj_open"])
+        return prices
+
+    def _close_prices(self, session: pd.Timestamp) -> dict[str, float]:
+        prices: dict[str, float] = {}
+        for ticker in self.tickers:
+            row = self._row_for(ticker, session)
+            if row is not None and pd.notna(row.get("adj_close")):
+                prices[ticker] = float(row["adj_close"])
+        return prices
+
+    def _market_features(self, session: pd.Timestamp) -> dict[str, dict[str, float | None]]:
+        features: dict[str, dict[str, float | None]] = {}
+        for ticker in self.tickers:
+            frame = self.prices.get(ticker)
+            if frame is None or frame.empty:
+                features[ticker] = {}
+                continue
+            pos = self._position_for(ticker, session)
+            history = frame.iloc[:pos]
+            if history.empty:
+                features[ticker] = {}
+                continue
+            closes = history["adj_close"].to_numpy()
+            volumes = history["volume"].to_numpy()
+            features[ticker] = compute_market_features(closes, volumes)
+        return features
+
+    def _fundamental_features(
+        self,
+        session: pd.Timestamp,
+        prev_fundamentals: dict[str, Any],
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+        current_fundamentals: dict[str, Any] = {}
+        features: dict[str, dict[str, Any]] = {}
+
+        if self.fundamentals.empty:
+            for ticker in self.tickers:
+                features[ticker] = compute_fundamental_features(None, session)
+            return features, current_fundamentals
+
+        yoy = compute_yoy_growth(self.fundamentals, session)
+        latest = latest_available_fundamentals(self.fundamentals, session)
+
+        for ticker in self.tickers:
+            ticker_rows = latest[latest["ticker"] == ticker]
+            if ticker_rows.empty:
+                features[ticker] = compute_fundamental_features(None, session)
+                continue
+            row = ticker_rows.iloc[0].to_dict()
+            row["revenue_yoy"] = yoy.get(ticker)
+            current_fundamentals[ticker] = row
+            prev_row = prev_fundamentals.get(ticker)
+            previous_available_at = prev_row.get("available_at") if prev_row else None
+            features[ticker] = compute_fundamental_features(
+                row,
+                session,
+                previous_available_at,
+            )
+
+        return features, current_fundamentals
+
+    def _universe_rows(self) -> list[dict[str, str]]:
+        return [
+            {
+                "ticker": ticker,
+                "company_name": ticker,
+                "sector": self.sector_map.get(ticker, ""),
+            }
+            for ticker in self.tickers
+        ]
+
+    def _portfolio_snapshot(
+        self,
+        state: PortfolioState,
+        prices: dict[str, float],
+    ) -> dict[str, Any]:
+        nav = state.nav(prices)
+        weights = {}
+        for ticker in self.tickers:
+            price = prices.get(ticker)
+            if price is None or nav <= 0:
+                weights[ticker] = 0.0
+            else:
+                weights[ticker] = state.shares.get(ticker, 0.0) * price / nav
+        return {
+            "weights": weights,
+            "cash_ratio": state.cash / nav if nav > 0 else 1.0,
+            "nav": nav,
+        }
+
+    def _visible_news_window(
+        self,
+        cutoff_utc: datetime,
+        previous_cutoff_utc: datetime | None,
+    ) -> list[NewsRecord]:
+        ticker_set = set(self.tickers)
+        records = []
+        for record in self._all_news():
+            if previous_cutoff_utc is not None and record.available_at_utc <= previous_cutoff_utc:
+                continue
+            if record.available_at_utc > cutoff_utc:
+                continue
+            if not ticker_set.intersection(record.tickers):
+                continue
+            records.append(record)
+        return sorted(
+            records,
+            key=lambda record: (
+                record.available_at_utc,
+                record.provider,
+                record.provider_news_id,
+            ),
+        )
+
+    def _call_reset(self, agent: Any, context: dict[str, Any]) -> None:
+        reset = getattr(agent, "reset", None)
+        if reset is None:
+            return
+        try:
+            reset(context)
+        except TypeError:
+            reset()
+
+    def _call_observe(self, agent: Any, event: Any) -> None:
+        observe = getattr(agent, "observe", None)
+        if observe is not None:
+            observe(event)
+
+    def run_agent(
+        self,
+        agent: Any,
+        agent_name: str,
+        output_dir: str | Path,
+    ) -> dict[str, Any]:
+        cfg = self.config
+        sessions = select_evaluation_sessions(self.calendar, cfg.evaluation)
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        state = PortfolioState(
+            cash=float(cfg.evaluation.initial_cash),
+            shares={ticker: 0.0 for ticker in self.tickers},
+        )
+        engine = ExecutionEngine(
+            fee_rate=cfg.evaluation.fee_rate,
+            slippage_bps=cfg.evaluation.slippage_bps,
+        )
+        constraints = {
+            "long_only": cfg.constraints.long_only,
+            "max_asset_weight": cfg.constraints.max_asset_weight,
+            "max_gross_exposure": cfg.constraints.max_gross_exposure,
+            "fee_rate": cfg.evaluation.fee_rate,
+            "slippage_bps": cfg.evaluation.slippage_bps,
+        }
+        context = {
+            "agent_name": agent_name,
+            "tickers": list(self.tickers),
+            "config": config_to_dict(cfg),
+        }
+        self._call_reset(agent, context)
+
+        nav_history = [float(cfg.evaluation.initial_cash)]
+        daily_records: list[dict[str, Any]] = []
+        trades_records: list[dict[str, Any]] = []
+        actions_records: list[dict[str, Any]] = []
+        news_seen_records: list[dict[str, Any]] = []
+        violations_records: list[dict[str, Any]] = []
+        prev_fundamentals: dict[str, Any] = {}
+        previous_cutoff_utc: datetime | None = None
+        total_cost = 0.0
+        total_trade_value = 0.0
+        violation_days = 0
+
+        for session in sessions:
+            clock = session_clock(
+                session,
+                cfg.evaluation.decision_minutes_before_close,
+            )
+            open_prices = self._open_prices(session)
+            close_prices = self._close_prices(session)
+            self._call_observe(
+                agent,
+                MarketOpenEvent(
+                    session_date=clock.session_date,
+                    event_time_utc=clock.open_utc,
+                    open_prices=open_prices,
+                ),
+            )
+
+            visible_news = self._visible_news_window(
+                clock.decision_cutoff_utc,
+                previous_cutoff_utc,
+            )
+            for record in visible_news:
+                self._call_observe(
+                    agent,
+                    NewsEvent(
+                        session_date=clock.session_date,
+                        event_time_utc=record.available_at_utc,
+                        record=record,
+                    ),
+                )
+
+            market_features = self._market_features(session)
+            fundamental_features, prev_fundamentals = self._fundamental_features(
+                session,
+                prev_fundamentals,
+            )
+            portfolio = self._portfolio_snapshot(state, open_prices)
+            observation = build_decision_observation(
+                session_date=clock.session_date,
+                event_time_utc=clock.decision_cutoff_utc,
+                universe=self._universe_rows(),
+                open_prices=open_prices,
+                market_features=market_features,
+                fundamental_features=fundamental_features,
+                portfolio=portfolio,
+                constraints=constraints,
+                news=visible_news,
+                max_news_items=cfg.news.max_items_per_decision,
+            )
+
+            try:
+                raw_action = agent.decide(observation)
+            except Exception as exc:
+                raw_action = {}
+                violations_records.append(
+                    {
+                        "session_date": clock.session_date,
+                        "type": "invalid_action",
+                        "detail": str(exc),
+                    }
+                )
+
+            sanitized, violations = sanitize_target_weights(
+                raw_action,
+                allowed_assets=set(self.tickers),
+                max_asset_weight=cfg.constraints.max_asset_weight,
+                max_gross_exposure=cfg.constraints.max_gross_exposure,
+            )
+            if violations:
+                violation_days += 1
+                for violation in violations:
+                    violations_records.append(
+                        {
+                            "session_date": clock.session_date,
+                            "type": violation,
+                        }
+                    )
+
+            state, trades = engine.execute_close(state, sanitized, close_prices)
+            session_cost = sum(trade.fee for trade in trades)
+            session_trade_value = sum(trade.trade_value for trade in trades)
+            total_cost += session_cost
+            total_trade_value += session_trade_value
+            nav_close = state.nav(close_prices)
+            previous_nav = nav_history[-1]
+            nav_history.append(nav_close)
+            daily_return = nav_close / previous_nav - 1.0 if previous_nav > 0 else 0.0
+
+            daily_records.append(
+                {
+                    "session_date": clock.session_date,
+                    "nav": nav_close,
+                    "daily_return": daily_return,
+                    "cash": state.cash,
+                    "cash_ratio": state.cash / nav_close if nav_close > 0 else 1.0,
+                    "transaction_cost": session_cost,
+                    "traded_notional": session_trade_value,
+                }
+            )
+            actions_records.append(
+                {
+                    "session_date": clock.session_date,
+                    "raw_action": raw_action,
+                    "sanitized_action": sanitized,
+                    "violations": violations,
+                }
+            )
+            for trade in trades:
+                trade_data = asdict(trade)
+                trade_data["session_date"] = clock.session_date
+                trades_records.append(trade_data)
+            for item in observation["news"]:
+                news_item = dict(item)
+                news_item["session_date"] = clock.session_date
+                news_seen_records.append(news_item)
+
+            previous_cutoff_utc = clock.decision_cutoff_utc
+
+        metrics = compute_metrics(
+            nav=nav_history,
+            initial_capital=cfg.evaluation.initial_cash,
+            total_transaction_cost=total_cost,
+            total_trade_value=total_trade_value,
+            violation_steps=violation_days,
+            decision_steps=len(sessions),
+            annualization=cfg.evaluation.annualization,
+        )
+        manifest = {
+            "agent_name": agent_name,
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "config_hash": hash_config(cfg),
+            "resolved_config": config_to_dict(cfg),
+            "historical_backfill_mode": cfg.news.historical_backfill_mode,
+        }
+        result = {
+            "metrics": metrics,
+            "daily_records": daily_records,
+            "trades": trades_records,
+            "actions": actions_records,
+            "news_seen": news_seen_records,
+            "violations": violations_records,
+            "run_manifest": manifest,
+        }
+        self._save_daily_outputs(result, output_path)
+        return result
+
+    def _write_jsonl(self, path: Path, records: list[dict[str, Any]]) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            for record in records:
+                f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+    def _save_daily_outputs(self, result: dict[str, Any], output_dir: Path) -> None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        with open(output_dir / "metrics.json", "w", encoding="utf-8") as f:
+            json.dump(result["metrics"], f, indent=2, default=str)
+        pd.DataFrame(result["daily_records"]).to_csv(
+            output_dir / "daily_nav.csv",
+            index=False,
+        )
+        self._write_jsonl(output_dir / "trades.jsonl", result["trades"])
+        self._write_jsonl(output_dir / "actions.jsonl", result["actions"])
+        self._write_jsonl(output_dir / "news_seen.jsonl", result["news_seen"])
+        self._write_jsonl(output_dir / "violations.jsonl", result["violations"])
+        with open(output_dir / "run_manifest.json", "w", encoding="utf-8") as f:
+            json.dump(result["run_manifest"], f, indent=2, default=str)
