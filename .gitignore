@@ -221,5 +221,7 @@ __marimo__/
 models/
 private_audit/
 results/
-stock_data_1y/
-rl_training_data/
+data/
+outputs/
+tests/
+docs/

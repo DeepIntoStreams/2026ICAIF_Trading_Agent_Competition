@@ -50,7 +50,7 @@ After the discussion last Wednesday, the working direction changed:
    ```python
    from openai import OpenAI
 
-   client = OpenAI(base_url="http://localhost:8000/v1", api_key="unused")
+   client = OpenAI(base_url="http://10.86.229.182:8000/v1", api_key="unused")
    response = client.chat.completions.create(
        model="google/gemma-4-31B-it",
        messages=[{"role": "user", "content": "Hello!"}],
@@ -240,7 +240,7 @@ news:
 agents:
   enabled: ["hybrid", "ppo", "llm"]
   llm:
-    base_url: "http://localhost:8000/v1"
+    base_url: "http://10.86.229.182:8000/v1" 
     api_key: "unused"
     model: "google/gemma-4-31B-it"
 ```
@@ -313,7 +313,7 @@ python scripts/run_evaluation.py `
   --set news.data_dir=data/news/backfill_20260505_20260618 `
   --set evaluation.horizon_trading_days=10 `
   --set 'agents.enabled=["hybrid","ppo","llm"]' `
-  --set agents.llm.base_url=http://localhost:8000/v1 `
+  --set agents.llm.base_url=http://10.86.229.182:8000/v1 `
   --set agents.llm.api_key=unused `
   --set agents.llm.model=google/gemma-4-31B-it
 ```

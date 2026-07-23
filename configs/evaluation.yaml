@@ -36,7 +36,7 @@ agents:
     news_beta: 0.30
     news_count_gamma: 0.05
   llm:
-    base_url: "http://localhost:8000/v1"
+    base_url: "http://10.86.229.182:8000/v1"
     api_key: "unused"
     model: "google/gemma-4-31B-it"
     temperature: 0.0
