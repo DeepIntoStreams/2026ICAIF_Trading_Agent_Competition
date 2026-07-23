@@ -59,6 +59,7 @@ def build_agent(agent_name: str, config: CompetitionConfig) -> object:
         return NewsTiltedPPOAgent(
             checkpoint_path=settings.checkpoint_path,
             max_asset_weight=config.constraints.max_asset_weight,
+            seed=settings.seed,
             news_beta=settings.news_beta,
             news_count_gamma=settings.news_count_gamma,
         )
@@ -126,4 +127,3 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

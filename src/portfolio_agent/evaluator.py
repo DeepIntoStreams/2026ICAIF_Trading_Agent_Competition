@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import subprocess
@@ -677,14 +678,15 @@ class DailyTradingEvaluator:
             raise ValueError("data_root is required unless using from_frames")
 
         self.config = config
+        self.data_root = Path(data_root)
         self.secret = secret or os.urandom(32)
         self.news_store = news_store
 
-        sectors = load_evaluation_universe(data_root)
+        sectors = load_evaluation_universe(self.data_root)
         tickers = flatten_universe(sectors)
-        raw_prices = load_price_data(data_root, tickers)
+        raw_prices = load_price_data(self.data_root, tickers)
         calendar, prices = align_trading_dates(raw_prices)
-        fundamentals = load_fundamentals(data_root, tickers)
+        fundamentals = load_fundamentals(self.data_root, tickers)
 
         self._set_frames(
             prices=prices,
@@ -705,6 +707,7 @@ class DailyTradingEvaluator:
     ) -> "DailyTradingEvaluator":
         evaluator = cls.__new__(cls)
         evaluator.config = config
+        evaluator.data_root = None
         evaluator.secret = b"unit-test-secret"
         evaluator.news_store = None
         all_dates: set[pd.Timestamp] = set()
@@ -742,6 +745,30 @@ class DailyTradingEvaluator:
         if self.news_store is not None:
             return self.news_store.load_all()
         return list(self._news_records)
+
+    def _market_hashes(self) -> dict[str, str]:
+        if self.data_root is None:
+            return {}
+
+        root = Path(self.data_root)
+        paths: list[Path] = [root / "universe.json"]
+        for ticker in self.tickers:
+            paths.append(root / "prices_daily" / f"{ticker}.csv")
+            fundamentals_dir = root / "fundamentals_quarterly" / ticker
+            paths.extend(
+                [
+                    fundamentals_dir / "income_statement.csv",
+                    fundamentals_dir / "balance_sheet.csv",
+                    fundamentals_dir / "cash_flow.csv",
+                ]
+            )
+
+        hashes: dict[str, str] = {}
+        for path in paths:
+            if path.exists() and path.is_file():
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                hashes[path.relative_to(root).as_posix()] = digest
+        return hashes
 
     def _row_for(self, ticker: str, session: pd.Timestamp) -> pd.Series | None:
         frame = self.prices.get(ticker)
@@ -987,12 +1014,15 @@ class DailyTradingEvaluator:
                 constraints=constraints,
                 news=visible_news,
                 max_news_items=cfg.news.max_items_per_decision,
+                include_raw_text=cfg.news.include_raw_text,
             )
 
+            had_violation = False
             try:
                 raw_action = agent.decide(observation)
             except Exception as exc:
                 raw_action = {}
+                had_violation = True
                 violations_records.append(
                     {
                         "session_date": clock.session_date,
@@ -1001,6 +1031,20 @@ class DailyTradingEvaluator:
                     }
                 )
 
+            agent_violation = getattr(agent, "last_decision_violation", None)
+            if agent_violation:
+                had_violation = True
+                violations_records.append(
+                    {
+                        "session_date": clock.session_date,
+                        "type": str(agent_violation),
+                    }
+                )
+                try:
+                    setattr(agent, "last_decision_violation", None)
+                except Exception:
+                    pass
+
             sanitized, violations = sanitize_target_weights(
                 raw_action,
                 allowed_assets=set(self.tickers),
@@ -1008,7 +1052,7 @@ class DailyTradingEvaluator:
                 max_gross_exposure=cfg.constraints.max_gross_exposure,
             )
             if violations:
-                violation_days += 1
+                had_violation = True
                 for violation in violations:
                     violations_records.append(
                         {
@@ -1016,6 +1060,8 @@ class DailyTradingEvaluator:
                             "type": violation,
                         }
                     )
+            if had_violation:
+                violation_days += 1
 
             state, trades = engine.execute_close(state, sanitized, close_prices)
             session_cost = sum(trade.fee for trade in trades)
@@ -1044,6 +1090,18 @@ class DailyTradingEvaluator:
                     "raw_action": raw_action,
                     "sanitized_action": sanitized,
                     "violations": violations,
+                    "agent_diagnostics": {
+                        "last_pre_tilt_weights": getattr(
+                            agent,
+                            "last_pre_tilt_weights",
+                            None,
+                        ),
+                        "last_post_tilt_weights": getattr(
+                            agent,
+                            "last_post_tilt_weights",
+                            None,
+                        ),
+                    },
                 }
             )
             for trade in trades:
@@ -1065,12 +1123,13 @@ class DailyTradingEvaluator:
             violation_steps=violation_days,
             decision_steps=len(sessions),
             annualization=cfg.evaluation.annualization,
+            risk_free_rate=cfg.evaluation.risk_free_rate,
         )
         news_hashes = self.news_store.file_hashes() if self.news_store is not None else {}
         manifest = build_run_manifest(
             config=cfg,
             agent_name=agent_name,
-            market_hashes={},
+            market_hashes=self._market_hashes(),
             news_hashes=news_hashes,
             code_state=_current_code_state(),
         )

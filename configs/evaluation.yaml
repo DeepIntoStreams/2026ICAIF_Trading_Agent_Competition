@@ -2,6 +2,7 @@ evaluation:
   initial_cash: 1000000
   pre_roll_days: 60
   horizon_trading_days: 10
+  seed: 1
   start_date:
   end_date:
   decision_minutes_before_close: 10
@@ -31,6 +32,7 @@ agents:
     max_positions: 8
   ppo:
     checkpoint_path:
+    seed: 1
     news_beta: 0.30
     news_count_gamma: 0.05
   llm:

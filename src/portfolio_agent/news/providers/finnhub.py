@@ -30,14 +30,12 @@ class FinnhubCompanyNewsProvider:
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
 
-    def fetch_company_news(
+    def fetch_raw_company_news(
         self,
         ticker: str,
-        company_name: str,
         start_date: date,
         end_date: date,
-        fetched_at_utc: datetime,
-    ) -> list[NewsRecord]:
+    ) -> list[dict[str, Any]]:
         payload = _get_json(
             FINNHUB_COMPANY_NEWS_URL,
             {
@@ -48,10 +46,20 @@ class FinnhubCompanyNewsProvider:
             },
             self.timeout_seconds,
         )
+        return list(payload or [])
+
+    def fetch_company_news(
+        self,
+        ticker: str,
+        company_name: str,
+        start_date: date,
+        end_date: date,
+        fetched_at_utc: datetime,
+    ) -> list[NewsRecord]:
+        payload = self.fetch_raw_company_news(ticker, start_date, end_date)
         return normalize_finnhub_company_news(
-            payloads=list(payload or []),
+            payloads=payload,
             ticker=ticker,
             company_name=company_name,
             fetched_at_utc=fetched_at_utc,
         )
-

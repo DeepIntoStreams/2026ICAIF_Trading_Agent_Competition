@@ -188,7 +188,11 @@ class PPOPortfolioAgent(BaseAgent):
         feature_dim: int = FEATURE_DIM,
         embed_dim: int = 64,
         n_heads: int = 4,
+        seed: int | None = 1,
     ):
+        if seed is not None:
+            np.random.seed(seed)
+            torch.manual_seed(seed)
         self.max_asset_weight = max_asset_weight
         self.policy = PortfolioPolicy(
             feature_dim=feature_dim,

@@ -35,8 +35,11 @@ def normalize_finnhub_company_news(
         available_at = published_at if historical_backfill_mode else first_seen_at
         raw_for_hash = {
             "provider": "finnhub",
-            "ticker": ticker,
-            "payload": payload,
+            "headline": payload.get("headline", ""),
+            "summary": payload.get("summary", ""),
+            "source": payload.get("source", ""),
+            "url": payload.get("url", ""),
+            "datetime": payload.get("datetime"),
         }
         records.append(
             NewsRecord(

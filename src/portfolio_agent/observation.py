@@ -184,7 +184,10 @@ def build_observation(
     return observation
 
 
-def _serialize_news(record: NewsRecord) -> dict[str, Any]:
+def _serialize_news(
+    record: NewsRecord,
+    include_raw_text: bool = True,
+) -> dict[str, Any]:
     return {
         "provider": record.provider,
         "provider_news_id": record.provider_news_id,
@@ -194,8 +197,8 @@ def _serialize_news(record: NewsRecord) -> dict[str, Any]:
         "ticker": record.tickers[0] if record.tickers else None,
         "tickers": list(record.tickers),
         "company_names": list(record.company_names),
-        "headline": record.headline,
-        "summary": record.summary,
+        "headline": record.headline if include_raw_text else "",
+        "summary": record.summary if include_raw_text else "",
         "source": record.source,
         "url": record.url,
         "content_hash": record.content_hash,
@@ -213,6 +216,7 @@ def build_decision_observation(
     constraints: dict[str, Any],
     news: list[NewsRecord],
     max_news_items: int,
+    include_raw_text: bool = True,
 ) -> dict[str, Any]:
     """Build a ticker-aware point-in-time decision observation."""
     visible_news = [
@@ -226,7 +230,7 @@ def build_decision_observation(
             record.provider_news_id,
         )
     )
-    capped_news = visible_news[:max_news_items]
+    capped_news = visible_news[-max_news_items:] if max_news_items > 0 else []
 
     assets: list[dict[str, Any]] = []
     for item in universe:
@@ -243,7 +247,10 @@ def build_decision_observation(
         "fundamental_features": fundamental_features,
         "portfolio": dict(portfolio),
         "constraints": dict(constraints),
-        "news": [_serialize_news(record) for record in capped_news],
+        "news": [
+            _serialize_news(record, include_raw_text=include_raw_text)
+            for record in capped_news
+        ],
     }
     assert_observation_point_in_time(observation, event_time_utc)
     return observation

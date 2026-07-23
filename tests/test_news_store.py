@@ -52,6 +52,20 @@ def test_store_dedupes_by_provider_id_and_hash(tmp_path):
     assert len(visible) == 1
 
 
+def test_store_merges_ticker_mappings_for_duplicate_story_hash(tmp_path):
+    store = NewsStore(tmp_path)
+    one = _record("1", "AAPL", "2026-06-05T18:00:00Z", "Mega cap wins contract")
+    two = _record("2", "MSFT", "2026-06-05T18:01:00Z", "Mega cap wins contract")
+    two.content_hash = one.content_hash
+    store.write_normalized([one, two])
+    visible = store.load_visible(
+        ["AAPL", "MSFT"],
+        datetime(2026, 6, 5, 19, 0, tzinfo=timezone.utc),
+    )
+    assert len(visible) == 1
+    assert visible[0].tickers == ["AAPL", "MSFT"]
+
+
 def test_simple_sentiment_scores_positive_and_negative_news():
     records = [
         _record("good", "NVDA", "2026-06-05T18:00:00Z", "NVDA raises guidance after earnings beat"),

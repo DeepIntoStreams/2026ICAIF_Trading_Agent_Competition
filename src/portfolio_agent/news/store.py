@@ -31,14 +31,22 @@ class NewsStore:
             (record.provider, record.provider_news_id): record
             for record in existing
         }
-        seen_hashes = {record.content_hash for record in existing}
+        hash_to_key = {
+            record.content_hash: (record.provider, record.provider_news_id)
+            for record in existing
+        }
 
         for record in records:
             key = (record.provider, record.provider_news_id)
-            if key in by_key or record.content_hash in seen_hashes:
+            if key in by_key:
+                _merge_record(by_key[key], record)
+                hash_to_key[by_key[key].content_hash] = key
+                continue
+            if record.content_hash in hash_to_key:
+                _merge_record(by_key[hash_to_key[record.content_hash]], record)
                 continue
             by_key[key] = record
-            seen_hashes.add(record.content_hash)
+            hash_to_key[record.content_hash] = key
 
         ordered = sorted(
             by_key.values(),
@@ -92,3 +100,18 @@ class NewsStore:
                 rel = str(path.relative_to(self.root))
                 hashes[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
         return hashes
+
+
+def _merge_unique(left: list[str], right: list[str]) -> list[str]:
+    return sorted({*left, *right})
+
+
+def _merge_record(target: NewsRecord, incoming: NewsRecord) -> None:
+    target.tickers = _merge_unique(target.tickers, incoming.tickers)
+    target.company_names = _merge_unique(target.company_names, incoming.company_names)
+    target.published_at_utc = min(target.published_at_utc, incoming.published_at_utc)
+    target.fetched_at_utc = min(target.fetched_at_utc, incoming.fetched_at_utc)
+    target.first_seen_at_utc = min(target.first_seen_at_utc, incoming.first_seen_at_utc)
+    target.available_at_utc = min(target.available_at_utc, incoming.available_at_utc)
+    if not target.raw_path and incoming.raw_path:
+        target.raw_path = incoming.raw_path

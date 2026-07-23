@@ -18,6 +18,7 @@ class EvaluationSettings:
     initial_cash: float = 1_000_000.0
     pre_roll_days: int = 60
     horizon_trading_days: int = 10
+    seed: int = 1
     start_date: str | None = None
     end_date: str | None = None
     decision_minutes_before_close: int = 10
@@ -54,6 +55,7 @@ class HybridAgentSettings:
 @dataclass
 class PPOAgentSettings:
     checkpoint_path: str | None = None
+    seed: int = 1
     news_beta: float = 0.30
     news_count_gamma: float = 0.05
 

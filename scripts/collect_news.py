@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from portfolio_agent.config import load_config
 from portfolio_agent.data_loader import flatten_universe, load_evaluation_universe
+from portfolio_agent.news.normalizer import normalize_finnhub_company_news
 from portfolio_agent.news.providers.finnhub import FinnhubCompanyNewsProvider
 from portfolio_agent.news.store import NewsStore
 
@@ -43,12 +44,30 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     all_records = []
     for ticker in tickers:
-        records = provider.fetch_company_news(
-            ticker=ticker,
-            company_name=ticker,
+        raw_payloads = provider.fetch_raw_company_news(
+            ticker,
             start_date=today,
             end_date=today,
+        )
+        raw_path = store.write_raw(
+            "finnhub",
+            [
+                {
+                    "ticker": ticker,
+                    "company_name": ticker,
+                    "fetched_at_utc": fetched_at.isoformat(),
+                    "payload": payload,
+                }
+                for payload in raw_payloads
+            ],
+        )
+        records = normalize_finnhub_company_news(
+            payloads=raw_payloads,
+            ticker=ticker,
+            company_name=ticker,
             fetched_at_utc=fetched_at,
+            raw_path=raw_path,
+            historical_backfill_mode=config.news.historical_backfill_mode,
         )
         all_records.extend(records)
 
@@ -58,4 +77,3 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

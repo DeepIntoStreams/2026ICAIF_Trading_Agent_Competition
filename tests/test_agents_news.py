@@ -82,6 +82,14 @@ def test_news_tilted_ppo_keeps_output_feasible():
     assert all(value >= 0 for value in weights.values())
 
 
+def test_news_tilted_ppo_is_seeded_when_no_checkpoint():
+    first = NewsTiltedPPOAgent(news_beta=0.5, news_count_gamma=0.1, seed=123)
+    second = NewsTiltedPPOAgent(news_beta=0.5, news_count_gamma=0.1, seed=123)
+    assert first.decide(_observation("Apple raises guidance")) == second.decide(
+        _observation("Apple raises guidance")
+    )
+
+
 def test_llm_agent_uses_configured_endpoint_and_news(monkeypatch):
     captured = {}
 

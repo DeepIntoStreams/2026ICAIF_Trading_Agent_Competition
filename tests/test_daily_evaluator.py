@@ -100,3 +100,58 @@ def test_evaluator_does_not_show_post_cutoff_news_until_next_session(tmp_path):
     assert "visible news" in agent.news_by_session["2026-06-05"]
     assert "post-cutoff news" not in agent.news_by_session["2026-06-05"]
     assert "post-cutoff news" in agent.news_by_session["2026-06-08"]
+
+
+def test_evaluator_passes_risk_free_rate_to_metrics(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_compute_metrics(**kwargs):
+        captured.update(kwargs)
+        return {"m1_cumulative_return": 0.0}
+
+    monkeypatch.setattr("portfolio_agent.evaluator.compute_metrics", fake_compute_metrics)
+    cfg = load_config(
+        None,
+        overrides=[
+            "evaluation.horizon_trading_days=1",
+            "evaluation.risk_free_rate=0.05",
+        ],
+    )
+    dates = pd.to_datetime(["2026-06-05"])
+    prices = {
+        "AAPL": pd.DataFrame({"date": dates, "adj_open": [100.0], "adj_close": [101.0], "volume": [1]}),
+    }
+    evaluator = DailyTradingEvaluator.from_frames(
+        prices=prices,
+        fundamentals=pd.DataFrame(),
+        universe={"Technology": ["AAPL"]},
+        config=cfg,
+        news_records=[],
+    )
+    evaluator.run_agent(CaptureAgent(), "capture", tmp_path)
+    assert captured["risk_free_rate"] == 0.05
+
+
+def test_evaluator_counts_agent_reported_decision_failure_as_violation(tmp_path):
+    class ReportFailureAgent:
+        def reset(self, context=None):
+            self.last_decision_violation = None
+
+        def decide(self, observation):
+            self.last_decision_violation = "llm_parse_failure"
+            return {}
+
+    cfg = load_config(None, overrides=["evaluation.horizon_trading_days=1"])
+    dates = pd.to_datetime(["2026-06-05"])
+    prices = {
+        "AAPL": pd.DataFrame({"date": dates, "adj_open": [100.0], "adj_close": [101.0], "volume": [1]}),
+    }
+    evaluator = DailyTradingEvaluator.from_frames(
+        prices=prices,
+        fundamentals=pd.DataFrame(),
+        universe={"Technology": ["AAPL"]},
+        config=cfg,
+        news_records=[],
+    )
+    result = evaluator.run_agent(ReportFailureAgent(), "failure", tmp_path)
+    assert result["metrics"]["m9_violation_rate"] == 1.0

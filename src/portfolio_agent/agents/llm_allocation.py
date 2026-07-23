@@ -310,9 +310,11 @@ class LLMAllocationAgent(BaseAgent):
     def reset(self) -> None:
         self._last_weights = {}
         self._step_count = 0
+        self.last_decision_violation: str | None = None
 
     def decide(self, observation: dict[str, Any]) -> dict[str, float]:
         self._step_count += 1
+        self.last_decision_violation = None
 
         if (
             self.rebalance_frequency > 1
@@ -348,6 +350,7 @@ class LLMAllocationAgent(BaseAgent):
                     self.max_retries + 1,
                     text,
                 )
+                self.last_decision_violation = "llm_parse_failure"
             except Exception as e:
                 logger.warning(
                     "LLM call failed (attempt %d/%d): %s",
@@ -355,6 +358,7 @@ class LLMAllocationAgent(BaseAgent):
                     self.max_retries + 1,
                     e,
                 )
+                self.last_decision_violation = "llm_call_failed"
 
         if self._last_weights:
             return dict(self._last_weights)
