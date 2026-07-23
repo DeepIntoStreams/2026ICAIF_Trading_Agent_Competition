@@ -1,134 +1,129 @@
-"""Run walk-forward evaluation for one or more agents.
-
-Usage:
-    python scripts/run_evaluation.py \
-        --data_root stock_data_1y \
-        --config configs/evaluation.yaml \
-        --agents hybrid_rule ppo llm \
-        --output_dir results
-
-The evaluation data (stock_data_1y) is loaded exclusively by the evaluator.
-Agent code never sees raw tickers, dates, or prices.
-"""
+"""Run configurable news-aware daily trading evaluations."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
+from typing import Sequence
+
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from portfolio_agent.evaluator import WalkForwardEvaluator
+from portfolio_agent.agents.hybrid_rule import HybridRuleAgent
+from portfolio_agent.agents.llm_allocation import LLMAllocationAgent
+from portfolio_agent.agents.ppo_portfolio import NewsTiltedPPOAgent
+from portfolio_agent.config import CompetitionConfig, load_config
+from portfolio_agent.evaluator import DailyTradingEvaluator
+from portfolio_agent.news.store import NewsStore
 
 
-def build_agent(agent_name: str, config: dict) -> object:
-    agent_cfg = config.get("agents", {}).get(agent_name, {})
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run news-aware daily trading evaluation."
+    )
+    parser.add_argument("--data-root", required=True, help="Market data root directory.")
+    parser.add_argument(
+        "--config",
+        default="configs/evaluation.yaml",
+        help="Evaluation config YAML path.",
+    )
+    parser.add_argument(
+        "--output-root",
+        required=True,
+        help="Directory where evaluation outputs will be written.",
+    )
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        help="Override a config value, for example evaluation.horizon_trading_days=5.",
+    )
+    return parser.parse_args(argv)
 
-    if agent_name == "hybrid_rule":
-        from portfolio_agent.agents.hybrid_rule import HybridRuleAgent
+
+def build_agent(agent_name: str, config: CompetitionConfig) -> object:
+    if agent_name == "hybrid":
+        settings = config.agents.hybrid
         return HybridRuleAgent(
-            rebalance_frequency=agent_cfg.get("rebalance_frequency", 5),
-            max_positions=agent_cfg.get("max_positions", 8),
-            technical_weight=agent_cfg.get("technical_weight", 0.70),
-            fundamental_weight=agent_cfg.get("fundamental_weight", 0.30),
-            momentum_short_weight=agent_cfg.get("momentum_short_weight", 0.60),
-            momentum_long_weight=agent_cfg.get("momentum_long_weight", 0.40),
-            max_asset_weight=config.get("constraints", {}).get("max_asset_weight", 0.30),
+            rebalance_frequency=settings.rebalance_frequency,
+            max_positions=settings.max_positions,
+            news_weight=settings.news_weight,
+            max_asset_weight=config.constraints.max_asset_weight,
         )
 
     if agent_name == "ppo":
-        from portfolio_agent.agents.ppo_portfolio import PPOPortfolioAgent
-        return PPOPortfolioAgent(
-            checkpoint_path=agent_cfg.get("checkpoint"),
-            max_asset_weight=config.get("constraints", {}).get("max_asset_weight", 0.30),
+        settings = config.agents.ppo
+        return NewsTiltedPPOAgent(
+            checkpoint_path=settings.checkpoint_path,
+            max_asset_weight=config.constraints.max_asset_weight,
+            news_beta=settings.news_beta,
+            news_count_gamma=settings.news_count_gamma,
         )
 
     if agent_name == "llm":
-        from portfolio_agent.agents.llm_allocation import LLMAllocationAgent
+        settings = config.agents.llm
         return LLMAllocationAgent(
-            model_name=agent_cfg.get("model_name", "google/gemma-4-31B-it"),
-            base_url=agent_cfg.get("base_url", "http://10.86.229.182:8000/v1"),
-            api_key=agent_cfg.get("api_key", "unused"),
-            temperature=agent_cfg.get("temperature", 0.0),
-            rebalance_frequency=agent_cfg.get("rebalance_frequency", 5),
+            model_name=settings.model,
+            base_url=settings.base_url,
+            api_key=settings.api_key,
+            temperature=settings.temperature,
+            rebalance_frequency=settings.rebalance_frequency,
+            max_tokens=settings.max_tokens,
+            timeout_seconds=settings.timeout_seconds,
         )
 
     raise ValueError(f"Unknown agent: {agent_name}")
 
 
-def print_metrics(name: str, metrics: dict) -> None:
-    print(f"\n{'=' * 60}")
-    print(f"  Agent: {name}")
-    print(f"{'=' * 60}")
-    order = [
-        "sharpe", "total_return", "annualized_return",
-        "annualized_volatility", "sortino", "max_drawdown",
-        "calmar", "cost_rate", "turnover", "violation_rate",
+def _write_comparison(output_root: Path, results: dict[str, dict]) -> None:
+    output_root.mkdir(parents=True, exist_ok=True)
+    comparison = {
+        agent_name: result["metrics"]
+        for agent_name, result in results.items()
+    }
+    with open(output_root / "comparison.json", "w", encoding="utf-8") as f:
+        json.dump(comparison, f, indent=2, default=str)
+
+    rows = [
+        {"agent": agent_name, **metrics}
+        for agent_name, metrics in comparison.items()
     ]
-    for key in order:
-        val = metrics.get(key)
-        if val is None:
-            print(f"  {key:25s}: N/A")
-        elif key in ("total_return", "annualized_return", "max_drawdown", "cost_rate", "violation_rate"):
-            print(f"  {key:25s}: {val:+.4%}")
-        else:
-            print(f"  {key:25s}: {val:+.4f}")
-    print(f"{'=' * 60}\n")
+    pd.DataFrame(rows).to_csv(output_root / "comparison.csv", index=False)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Run portfolio evaluation")
-    parser.add_argument("--data_root", type=str, default="stock_data_1y")
-    parser.add_argument("--config", type=str, default="configs/evaluation.yaml")
-    parser.add_argument(
-        "--agents",
-        nargs="+",
-        default=["hybrid_rule"],
-        choices=["hybrid_rule", "ppo", "llm"],
-    )
-    parser.add_argument("--output_dir", type=str, default="results")
-    parser.add_argument("--audit_dir", type=str, default="private_audit")
-    parser.add_argument("--secret", type=str, default=None)
-    args = parser.parse_args()
-
-    secret = args.secret.encode() if args.secret else os.urandom(32)
-
-    evaluator = WalkForwardEvaluator(
+def main(argv: Sequence[str] | None = None) -> None:
+    args = parse_args(argv)
+    config = load_config(args.config, args.set)
+    output_root = Path(args.output_root)
+    news_store = NewsStore(config.news.data_dir)
+    evaluator = DailyTradingEvaluator(
         data_root=args.data_root,
-        config_path=args.config,
-        secret=secret,
+        config=config,
+        news_store=news_store,
     )
 
-    all_metrics: dict[str, dict] = {}
-
-    for agent_name in args.agents:
-        print(f"\n>>> Running evaluation for agent: {agent_name}")
-
-        agent = build_agent(agent_name, evaluator.cfg)
-        if hasattr(agent, "reset"):
-            agent.reset()
-
-        agent_output_dir = Path(args.output_dir) / agent_name
-        agent_audit_dir = Path(args.audit_dir) / agent_name
-        result = evaluator.run(
+    results: dict[str, dict] = {}
+    for agent_name in config.agents.enabled:
+        print(f"Running evaluation for agent: {agent_name}")
+        agent = build_agent(agent_name, config)
+        result = evaluator.run_agent(
             agent,
-            output_dir=agent_output_dir,
-            audit_dir=agent_audit_dir,
+            agent_name,
+            output_root / agent_name,
+        )
+        results[agent_name] = result
+        print(
+            f"Finished {agent_name}: "
+            f"cumulative_return={result['metrics']['m1_cumulative_return']:.4%}"
         )
 
-        print_metrics(agent_name, result["metrics"])
-        all_metrics[agent_name] = result["metrics"]
-
-    summary_path = Path(args.output_dir) / "comparison.json"
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(summary_path, "w", encoding="utf-8") as f:
-        json.dump(all_metrics, f, indent=2, default=str)
-
-    print(f"Comparison saved to {summary_path}")
+    _write_comparison(output_root, results)
+    print(f"Comparison saved to {output_root}")
 
 
 if __name__ == "__main__":
     main()
+

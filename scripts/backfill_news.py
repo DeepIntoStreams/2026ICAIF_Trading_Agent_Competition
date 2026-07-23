@@ -1,0 +1,72 @@
+"""Backfill historical company news for mechanics validation."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Sequence
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from portfolio_agent.config import load_config
+from portfolio_agent.data_loader import flatten_universe, load_evaluation_universe
+from portfolio_agent.news.providers.finnhub import FinnhubCompanyNewsProvider
+from portfolio_agent.news.store import NewsStore
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Backfill historical company news.")
+    parser.add_argument("--config", default="configs/evaluation.yaml")
+    parser.add_argument("--data-root", required=True)
+    parser.add_argument("--from-date", required=True)
+    parser.add_argument("--to-date", required=True)
+    parser.add_argument("--historical-backfill-mode", action="store_true")
+    parser.add_argument("--set", action="append", default=[])
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = parse_args(argv)
+    overrides = list(args.set)
+    if args.historical_backfill_mode:
+        overrides.append("news.historical_backfill_mode=true")
+    config = load_config(args.config, overrides)
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        raise SystemExit("FINNHUB_API_KEY is required for Finnhub backfill.")
+
+    sectors = load_evaluation_universe(args.data_root)
+    tickers = flatten_universe(sectors)
+    provider = FinnhubCompanyNewsProvider(api_key=api_key)
+    store = NewsStore(config.news.data_dir)
+    fetched_at = datetime.now(timezone.utc)
+    start_date = datetime.fromisoformat(args.from_date).date()
+    end_date = datetime.fromisoformat(args.to_date).date()
+
+    all_records = []
+    for ticker in tickers:
+        records = provider.fetch_company_news(
+            ticker=ticker,
+            company_name=ticker,
+            start_date=start_date,
+            end_date=end_date,
+            fetched_at_utc=fetched_at,
+        )
+        if config.news.historical_backfill_mode:
+            for record in records:
+                record.available_at_utc = record.published_at_utc
+        all_records.extend(records)
+
+    store.write_normalized(all_records)
+    print(
+        f"Backfilled {len(all_records)} normalized records "
+        f"(historical_backfill_mode={config.news.historical_backfill_mode})."
+    )
+
+
+if __name__ == "__main__":
+    main()
+
