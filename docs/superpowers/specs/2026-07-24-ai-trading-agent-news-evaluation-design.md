@@ -89,7 +89,11 @@ The MVP uses daily OHLCV data because that matches the current dataset. At decis
 
 ## Evaluation Window
 
-Initial functional replay should use the last 10 trading sessions already present in the local one-year stock dataset:
+Evaluation horizon must be configurable. The default MVP uses `horizon_trading_days = 10`, which corresponds to a two-week horizon under normal NYSE calendars. The evaluator must also support explicit `start_date` and `end_date` overrides so competition planners can compare 5-day, 10-day, 20-day, and multi-window runs without changing code.
+
+If `start_date` and `end_date` are supplied, they control the selected NYSE sessions. If only `end_date` and `horizon_trading_days` are supplied, the evaluator selects the last `horizon_trading_days` valid sessions ending on `end_date`. If no dates are supplied, the evaluator uses the latest `horizon_trading_days` sessions available in the market dataset.
+
+Initial functional replay should default to the last 10 trading sessions already present in the local one-year stock dataset:
 
 - 2026-06-05
 - 2026-06-08
@@ -146,6 +150,47 @@ class TradingAgent:
 - current portfolio state
 - news visible since the previous decision, with raw headline, summary, source, URL, ticker mapping, and timestamps
 - config constraints such as max position size, cash policy, and fee model
+
+## Experiment Configuration Interface
+
+The competition framework must expose experiment knobs through `configs/evaluation.yaml` and matching CLI overrides. These values are variables for competition planning, not constants embedded in agent or evaluator code.
+
+Required configurable fields:
+
+- `evaluation.horizon_trading_days`
+- `evaluation.start_date`
+- `evaluation.end_date`
+- `evaluation.decision_minutes_before_close`
+- `evaluation.initial_cash`
+- `evaluation.fee_rate`
+- `evaluation.slippage_bps`
+- `constraints.max_asset_weight`
+- `constraints.max_gross_exposure`
+- `news.providers`
+- `news.max_items_per_decision`
+- `news.include_raw_text`
+- `news.historical_backfill_mode`
+- `agents.enabled`
+- `agents.hybrid.news_weight`
+- `agents.hybrid.rebalance_frequency`
+- `agents.ppo.news_beta`
+- `agents.ppo.news_count_gamma`
+- `agents.llm.base_url`
+- `agents.llm.api_key`
+- `agents.llm.model`
+- `agents.llm.temperature`
+- `agents.llm.max_tokens`
+- `agents.llm.timeout_seconds`
+- `agents.llm.rebalance_frequency`
+
+The default LLM values remain:
+
+- `agents.llm.base_url = "http://localhost:8000/v1"`
+- `agents.llm.api_key = "unused"`
+- `agents.llm.model = "google/gemma-4-31B-it"`
+- `agents.llm.temperature = 0`
+
+Every run manifest must record the resolved config after CLI overrides. This allows fast experiments across horizon length, news limits, LLM model choice, and cost assumptions while keeping leaderboard runs reproducible.
 
 ## Baseline Agents
 
@@ -391,12 +436,13 @@ Tests:
 ## Acceptance Criteria
 
 - Finnhub collector can poll current-day company news before US market close and persist raw plus normalized records with `first_seen_at_utc`.
-- Evaluation can run 10 NYSE sessions with event order: open, news, cutoff decision, close.
+- Evaluation can run the default 10 NYSE sessions, and can also run another configured horizon without code changes.
 - Agents see ticker, company name, and raw allowed news, and never see post-cutoff market or news data.
 - Sentinel future-news test proves cutoff isolation.
 - All three baselines produce valid action logs, trades, daily NAV, news seen, violations, and metrics.
 - Metrics output includes M1 through M9 with the exact definitions in this spec.
 - LLM baseline uses `http://localhost:8000/v1`, `api_key="unused"`, and `model="google/gemma-4-31B-it"`.
+- LLM endpoint, model, temperature, token limit, timeout, and rebalance frequency can be changed through config or CLI overrides without changing code.
 - Same config, data hashes, code state, and seed reproduce the same non-LLM outputs. LLM outputs are deterministic when the local server honors deterministic decoding.
 - Historical replays are clearly labeled when strict first-seen timestamps are unavailable.
 - Official leaderboard runs are based on shadow-live captured news or another dataset with trustworthy availability timestamps.
