@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from .security import assert_agent_safe_observation, make_asset_id
+from .news.models import NewsRecord
+from .security import assert_agent_safe_observation, assert_observation_point_in_time
 
 
 def _safe_float(v: float) -> float | None:
@@ -179,4 +181,69 @@ def build_observation(
         "constraints": dict(constraints),
     }
     assert_agent_safe_observation(observation)
+    return observation
+
+
+def _serialize_news(record: NewsRecord) -> dict[str, Any]:
+    return {
+        "provider": record.provider,
+        "provider_news_id": record.provider_news_id,
+        "published_at_utc": record.published_at_utc.isoformat(),
+        "first_seen_at_utc": record.first_seen_at_utc.isoformat(),
+        "available_at_utc": record.available_at_utc.isoformat(),
+        "ticker": record.tickers[0] if record.tickers else None,
+        "tickers": list(record.tickers),
+        "company_names": list(record.company_names),
+        "headline": record.headline,
+        "summary": record.summary,
+        "source": record.source,
+        "url": record.url,
+        "content_hash": record.content_hash,
+    }
+
+
+def build_decision_observation(
+    session_date: str,
+    event_time_utc: datetime,
+    universe: list[dict[str, Any]],
+    open_prices: dict[str, float],
+    market_features: dict[str, dict[str, Any]],
+    fundamental_features: dict[str, dict[str, Any]],
+    portfolio: dict[str, Any],
+    constraints: dict[str, Any],
+    news: list[NewsRecord],
+    max_news_items: int,
+) -> dict[str, Any]:
+    """Build a ticker-aware point-in-time decision observation."""
+    visible_news = [
+        record for record in news
+        if record.available_at_utc <= event_time_utc
+    ]
+    visible_news.sort(
+        key=lambda record: (
+            record.available_at_utc,
+            record.provider,
+            record.provider_news_id,
+        )
+    )
+    capped_news = visible_news[:max_news_items]
+
+    assets: list[dict[str, Any]] = []
+    for item in universe:
+        ticker = str(item["ticker"])
+        asset = dict(item)
+        asset["open_price"] = open_prices.get(ticker)
+        assets.append(asset)
+
+    observation: dict[str, Any] = {
+        "session_date": session_date,
+        "event_time_utc": event_time_utc.isoformat(),
+        "assets": assets,
+        "market_features": market_features,
+        "fundamental_features": fundamental_features,
+        "portfolio": dict(portfolio),
+        "constraints": dict(constraints),
+        "news": [_serialize_news(record) for record in capped_news],
+    }
+    assert_observation_point_in_time(observation, event_time_utc)
     return observation
