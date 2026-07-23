@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 from dataclasses import asdict
 from datetime import datetime, timezone
 from collections.abc import Mapping
@@ -39,6 +40,47 @@ from .risk import sanitize_target_weights
 from .security import make_asset_id
 
 logger = logging.getLogger(__name__)
+
+
+def _current_code_state() -> dict[str, object]:
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        status = subprocess.check_output(
+            ["git", "status", "--porcelain"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        return {"commit": commit, "dirty": bool(status.strip())}
+    except Exception:
+        return {"commit": None, "dirty": None}
+
+
+def build_run_manifest(
+    config: CompetitionConfig,
+    agent_name: str,
+    market_hashes: dict[str, str],
+    news_hashes: dict[str, str],
+    code_state: dict[str, object],
+) -> dict[str, object]:
+    resolved_config = config_to_dict(config)
+    return {
+        "agent_name": agent_name,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "config_hash": hash_config(config),
+        "resolved_config": resolved_config,
+        "llm": {
+            "base_url": config.agents.llm.base_url,
+            "model": config.agents.llm.model,
+        },
+        "market_hashes": dict(market_hashes),
+        "news_hashes": dict(news_hashes),
+        "code_state": dict(code_state),
+        "historical_backfill_mode": config.news.historical_backfill_mode,
+    }
 
 
 class Agent(Protocol):
@@ -1024,13 +1066,14 @@ class DailyTradingEvaluator:
             decision_steps=len(sessions),
             annualization=cfg.evaluation.annualization,
         )
-        manifest = {
-            "agent_name": agent_name,
-            "created_at_utc": datetime.now(timezone.utc).isoformat(),
-            "config_hash": hash_config(cfg),
-            "resolved_config": config_to_dict(cfg),
-            "historical_backfill_mode": cfg.news.historical_backfill_mode,
-        }
+        news_hashes = self.news_store.file_hashes() if self.news_store is not None else {}
+        manifest = build_run_manifest(
+            config=cfg,
+            agent_name=agent_name,
+            market_hashes={},
+            news_hashes=news_hashes,
+            code_state=_current_code_state(),
+        )
         result = {
             "metrics": metrics,
             "daily_records": daily_records,
