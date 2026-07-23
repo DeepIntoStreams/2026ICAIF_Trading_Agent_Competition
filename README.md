@@ -97,9 +97,6 @@ future package-layout migration.
 | `pyproject.toml` | Python package metadata. The installable package is loaded from `src/`. |
 | `configs/evaluation.yaml` | Main configurable experiment file: horizon, costs, constraints, news settings, and agent settings. |
 | `2026_ICAIF_trading_agent_competition.pdf` | Earlier proposal draft, if present in the handoff. It is useful background but no longer exactly matches the current competition direction. |
-| `docs/news_evaluation_usage.md` | Short command reference for news-aware evaluation. |
-| `docs/superpowers/specs/2026-07-24-ai-trading-agent-news-evaluation-design.md` | Design note for the news-aware evaluation prototype. |
-| `docs/superpowers/plans/2026-07-24-news-aware-trading-evaluation.md` | Implementation plan used for the current prototype. |
 | `data/stock_data_1y/` | Local market/fundamental evaluation data, if present. Large data may be local-only. |
 | `data/rl_training_data/` | Local PPO training data, if present. |
 | `data/news/` | Local raw and normalized news store. |
@@ -159,24 +156,6 @@ future package-layout migration.
 | `src/portfolio_agent/news/providers/sec_edgar.py` | Scaffold for a SEC EDGAR supplement provider. |
 | `src/portfolio_agent/news/providers/__init__.py` | Provider package marker. |
 
-### Tests
-
-| Path | Purpose |
-| --- | --- |
-| `tests/conftest.py` | Test bootstrap that forces imports from `src/portfolio_agent`. |
-| `tests/test_config.py` | Configuration defaults, overrides, and config hashing. |
-| `tests/test_daily_evaluator.py` | Daily evaluator behavior, no future news leakage, risk-free-rate propagation, violation accounting, and `event_log.json`. |
-| `tests/test_execution.py` | Close-price target-weight execution and fee accounting. |
-| `tests/test_market_calendar.py` | Session selection and regular-close session clock behavior. |
-| `tests/test_metrics.py` | M1-M9 metric calculations and edge cases. |
-| `tests/test_news_providers.py` | Finnhub provider normalization behavior. |
-| `tests/test_news_store.py` | News visibility cutoff, deduplication, multi-ticker merge, and sentiment scoring. |
-| `tests/test_observation_news.py` | Observation-level news cutoff, latest-news cap, and raw-text hiding. |
-| `tests/test_point_in_time.py` | Point-in-time fundamental selection and derived-ratio behavior. |
-| `tests/test_reproducibility.py` | Run manifest contents. |
-| `tests/test_risk.py` | Target-weight repair and constraint enforcement. |
-| `tests/test_scripts_config.py` | Script override parsing and raw news persistence. |
-| `tests/test_security_boundary.py` | Legacy asset-ID behavior and current point-in-time safety checks. |
 
 ## Setup
 
