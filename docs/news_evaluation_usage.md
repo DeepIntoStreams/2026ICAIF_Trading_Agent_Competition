@@ -36,6 +36,12 @@ Validate an output directory:
 python scripts/validate_dataset.py --config configs/evaluation.yaml --data-root data/stock_data_1y --output-root outputs/final_smoke --set evaluation.horizon_trading_days=5
 ```
 
+Inspect the complete per-agent JSON event log:
+
+```powershell
+Get-Content outputs/news_eval_10d/llm/event_log.json
+```
+
 Collect Finnhub company news for the current UTC date:
 
 ```powershell

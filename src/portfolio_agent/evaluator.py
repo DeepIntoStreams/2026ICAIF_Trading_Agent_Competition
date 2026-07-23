@@ -959,6 +959,7 @@ class DailyTradingEvaluator:
         daily_records: list[dict[str, Any]] = []
         trades_records: list[dict[str, Any]] = []
         actions_records: list[dict[str, Any]] = []
+        event_sessions: list[dict[str, Any]] = []
         news_seen_records: list[dict[str, Any]] = []
         violations_records: list[dict[str, Any]] = []
         prev_fundamentals: dict[str, Any] = {}
@@ -1003,6 +1004,7 @@ class DailyTradingEvaluator:
                 prev_fundamentals,
             )
             portfolio = self._portfolio_snapshot(state, open_prices)
+            portfolio_before = dict(portfolio)
             observation = build_decision_observation(
                 session_date=clock.session_date,
                 event_time_utc=clock.decision_cutoff_utc,
@@ -1069,50 +1071,100 @@ class DailyTradingEvaluator:
             total_cost += session_cost
             total_trade_value += session_trade_value
             nav_close = state.nav(close_prices)
+            portfolio_after = self._portfolio_snapshot(state, close_prices)
             previous_nav = nav_history[-1]
             nav_history.append(nav_close)
             daily_return = nav_close / previous_nav - 1.0 if previous_nav > 0 else 0.0
 
-            daily_records.append(
-                {
-                    "session_date": clock.session_date,
-                    "nav": nav_close,
-                    "daily_return": daily_return,
-                    "cash": state.cash,
-                    "cash_ratio": state.cash / nav_close if nav_close > 0 else 1.0,
-                    "transaction_cost": session_cost,
-                    "traded_notional": session_trade_value,
-                }
-            )
-            actions_records.append(
-                {
-                    "session_date": clock.session_date,
-                    "raw_action": raw_action,
-                    "sanitized_action": sanitized,
-                    "violations": violations,
-                    "agent_diagnostics": {
-                        "last_pre_tilt_weights": getattr(
-                            agent,
-                            "last_pre_tilt_weights",
-                            None,
-                        ),
-                        "last_post_tilt_weights": getattr(
-                            agent,
-                            "last_post_tilt_weights",
-                            None,
-                        ),
-                    },
-                }
-            )
+            daily_record = {
+                "session_date": clock.session_date,
+                "nav": nav_close,
+                "daily_return": daily_return,
+                "cash": state.cash,
+                "cash_ratio": state.cash / nav_close if nav_close > 0 else 1.0,
+                "transaction_cost": session_cost,
+                "traded_notional": session_trade_value,
+            }
+            daily_records.append(daily_record)
+            agent_diagnostics = {
+                "last_pre_tilt_weights": getattr(
+                    agent,
+                    "last_pre_tilt_weights",
+                    None,
+                ),
+                "last_post_tilt_weights": getattr(
+                    agent,
+                    "last_post_tilt_weights",
+                    None,
+                ),
+            }
+            action_record = {
+                "session_date": clock.session_date,
+                "raw_action": raw_action,
+                "sanitized_action": sanitized,
+                "violations": violations,
+                "agent_diagnostics": agent_diagnostics,
+            }
+            actions_records.append(action_record)
+            session_trades: list[dict[str, Any]] = []
             for trade in trades:
                 trade_data = asdict(trade)
                 trade_data["session_date"] = clock.session_date
+                session_trades.append(trade_data)
                 trades_records.append(trade_data)
             for item in observation["news"]:
                 news_item = dict(item)
                 news_item["session_date"] = clock.session_date
                 news_seen_records.append(news_item)
 
+            event_sessions.append(
+                {
+                    "event": "daily_session",
+                    "session_index": len(event_sessions),
+                    "session_date": clock.session_date,
+                    "clock": {
+                        "open_et": clock.open_et.isoformat(),
+                        "open_utc": clock.open_utc.isoformat(),
+                        "decision_cutoff_et": clock.decision_cutoff_et.isoformat(),
+                        "decision_cutoff_utc": clock.decision_cutoff_utc.isoformat(),
+                        "close_et": clock.close_et.isoformat(),
+                        "close_utc": clock.close_utc.isoformat(),
+                    },
+                    "market_open": {
+                        "open_prices": open_prices,
+                        "portfolio_before": portfolio_before,
+                    },
+                    "observation": observation,
+                    "news": observation["news"],
+                    "decision": action_record,
+                    "raw_action": raw_action,
+                    "sanitized_action": sanitized,
+                    "agent_diagnostics": agent_diagnostics,
+                    "execution": {
+                        "close_prices": close_prices,
+                        "trades": session_trades,
+                        "transaction_cost": session_cost,
+                        "traded_notional": session_trade_value,
+                    },
+                    "trades": session_trades,
+                    "portfolio_before": portfolio_before,
+                    "portfolio_after": portfolio_after,
+                    "daily_record": daily_record,
+                    "running_metrics": {
+                        "sessions_completed": len(daily_records),
+                        "nav": nav_close,
+                        "cumulative_return": (
+                            nav_close / cfg.evaluation.initial_cash - 1.0
+                            if cfg.evaluation.initial_cash > 0
+                            else 0.0
+                        ),
+                        "daily_return": daily_return,
+                        "total_transaction_cost": total_cost,
+                        "total_traded_notional": total_trade_value,
+                        "violation_days": violation_days,
+                    },
+                }
+            )
             previous_cutoff_utc = clock.decision_cutoff_utc
 
         metrics = compute_metrics(
@@ -1133,6 +1185,13 @@ class DailyTradingEvaluator:
             news_hashes=news_hashes,
             code_state=_current_code_state(),
         )
+        event_log = {
+            "event": "evaluation_run",
+            "agent_name": agent_name,
+            "metrics": metrics,
+            "run_manifest": manifest,
+            "sessions": event_sessions,
+        }
         result = {
             "metrics": metrics,
             "daily_records": daily_records,
@@ -1141,6 +1200,7 @@ class DailyTradingEvaluator:
             "news_seen": news_seen_records,
             "violations": violations_records,
             "run_manifest": manifest,
+            "event_log": event_log,
         }
         self._save_daily_outputs(result, output_path)
         return result
@@ -1164,3 +1224,5 @@ class DailyTradingEvaluator:
         self._write_jsonl(output_dir / "violations.jsonl", result["violations"])
         with open(output_dir / "run_manifest.json", "w", encoding="utf-8") as f:
             json.dump(result["run_manifest"], f, indent=2, default=str)
+        with open(output_dir / "event_log.json", "w", encoding="utf-8") as f:
+            json.dump(result["event_log"], f, indent=2, ensure_ascii=False, default=str)

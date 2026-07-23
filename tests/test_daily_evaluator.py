@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -155,3 +156,69 @@ def test_evaluator_counts_agent_reported_decision_failure_as_violation(tmp_path)
     )
     result = evaluator.run_agent(ReportFailureAgent(), "failure", tmp_path)
     assert result["metrics"]["m9_violation_rate"] == 1.0
+
+
+def test_evaluator_writes_complete_json_event_log(tmp_path):
+    cfg = load_config(
+        None,
+        overrides=[
+            "evaluation.horizon_trading_days=1",
+            "evaluation.pre_roll_days=0",
+        ],
+    )
+    session_time = datetime(2026, 6, 5, 18, 0, tzinfo=timezone.utc)
+    dates = pd.to_datetime(["2026-06-05"])
+    prices = {
+        "AAPL": pd.DataFrame(
+            {
+                "date": dates,
+                "adj_open": [100.0],
+                "adj_close": [101.0],
+                "volume": [1_000_000],
+            }
+        ),
+    }
+    news = [
+        NewsRecord(
+            "unit",
+            "news-1",
+            session_time,
+            session_time,
+            session_time,
+            session_time,
+            ["AAPL"],
+            ["Apple Inc."],
+            "Apple wins a major contract",
+            "Contract value exceeded expectations.",
+            "unit",
+            "https://example.com/news-1",
+            "hash-1",
+            "",
+        )
+    ]
+    evaluator = DailyTradingEvaluator.from_frames(
+        prices=prices,
+        fundamentals=pd.DataFrame(),
+        universe={"Technology": ["AAPL"]},
+        config=cfg,
+        news_records=news,
+    )
+
+    result = evaluator.run_agent(CaptureAgent(), "capture", tmp_path)
+
+    event_log_path = tmp_path / "event_log.json"
+    event_log = json.loads(event_log_path.read_text(encoding="utf-8"))
+    assert event_log["agent_name"] == "capture"
+    assert event_log["metrics"] == result["metrics"]
+    assert event_log["run_manifest"] == result["run_manifest"]
+    assert len(event_log["sessions"]) == 1
+
+    session = event_log["sessions"][0]
+    assert session["session_date"] == "2026-06-05"
+    assert session["observation"]["news"][0]["headline"] == "Apple wins a major contract"
+    assert session["raw_action"] == {"AAPL": 0.5}
+    assert session["sanitized_action"] == {"AAPL": 0.3}
+    assert session["portfolio_before"]["cash_ratio"] == 1.0
+    assert session["portfolio_after"]["nav"] == session["daily_record"]["nav"]
+    assert session["running_metrics"]["sessions_completed"] == 1
+    assert session["trades"]
