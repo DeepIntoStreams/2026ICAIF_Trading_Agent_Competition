@@ -1,43 +1,43 @@
 evaluation:
   initial_cash: 1000000
-  evaluation_days: 252
   pre_roll_days: 60
+  horizon_trading_days: 10
+  start_date:
+  end_date:
+  decision_minutes_before_close: 10
   fee_rate: 0.001
-  execution_price: next_open
-  valuation_price: close
-  allow_fractional_shares: true
+  slippage_bps: 0.0
+  annualization: 252
+  risk_free_rate: 0.0
 
 constraints:
   long_only: true
   max_asset_weight: 0.30
   max_gross_exposure: 1.00
 
-privacy:
-  expose_tickers: false
-  expose_absolute_dates: false
-  expose_absolute_prices: false
-  expose_absolute_volumes: false
-  expose_raw_fundamental_amounts: false
-  permit_network_access: false
-  permit_external_llm_api: false
-  persist_raw_observations_in_agent_logs: false
+news:
+  providers: ["finnhub"]
+  data_dir: "data/news"
+  max_items_per_decision: 40
+  include_raw_text: true
+  historical_backfill_mode: false
+  final_poll_minutes_before_cutoff: 5
 
 agents:
-  hybrid_rule:
-    rebalance_frequency: 5
-    max_positions: 8
-    technical_weight: 0.70
-    fundamental_weight: 0.30
-    momentum_short_weight: 0.60
-    momentum_long_weight: 0.40
-
-  ppo:
+  enabled: ["hybrid", "ppo", "llm"]
+  hybrid:
+    news_weight: 0.20
     rebalance_frequency: 1
-    checkpoint: models/ppo_checkpoint.pt
-
+    max_positions: 8
+  ppo:
+    checkpoint_path:
+    news_beta: 0.30
+    news_count_gamma: 0.05
   llm:
-    rebalance_frequency: 5
-    model_name: "google/gemma-4-31B-it"
-    temperature: 0.0
-    base_url: "http://10.86.229.182:8000/v1"
+    base_url: "http://localhost:8000/v1"
     api_key: "unused"
+    model: "google/gemma-4-31B-it"
+    temperature: 0.0
+    max_tokens: 4096
+    timeout_seconds: 60.0
+    rebalance_frequency: 1
