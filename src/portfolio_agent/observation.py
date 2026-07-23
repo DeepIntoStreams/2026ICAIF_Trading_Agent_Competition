@@ -192,7 +192,6 @@ def _serialize_news(
         "provider": record.provider,
         "provider_news_id": record.provider_news_id,
         "published_at_utc": record.published_at_utc.isoformat(),
-        "first_seen_at_utc": record.first_seen_at_utc.isoformat(),
         "available_at_utc": record.available_at_utc.isoformat(),
         "ticker": record.tickers[0] if record.tickers else None,
         "tickers": list(record.tickers),
