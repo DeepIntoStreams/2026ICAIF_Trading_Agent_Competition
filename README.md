@@ -1,0 +1,1 @@
+# 2026ICAIF_Trading_Agent_Competition
