@@ -10,6 +10,7 @@ import pandas as pd
 
 from .config import EvaluationSettings
 from .events import SessionClock
+from .nyse_calendar import close_time_for
 
 
 ET = ZoneInfo("America/New_York")
@@ -60,7 +61,8 @@ def session_clock(
     close_time_et: time | None = None,
 ) -> SessionClock:
     date_value = pd.Timestamp(session_date).date()
-    close_t = close_time_et or time(16, 0)
+    # Honor NYSE early closes (1:00 PM ET) unless an explicit override is passed.
+    close_t = close_time_et or close_time_for(date_value)
     open_et = datetime.combine(date_value, time(9, 30), tzinfo=ET)
     close_et = datetime.combine(date_value, close_t, tzinfo=ET)
     cutoff_et = close_et - timedelta(minutes=decision_minutes_before_close)

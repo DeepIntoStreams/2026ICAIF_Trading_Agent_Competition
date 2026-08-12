@@ -6,6 +6,12 @@ import math
 from collections.abc import Iterable, Mapping
 
 
+# Absolute tolerance on the gross-exposure check. Without it, a weight vector that
+# sums to exactly 1.0 in exact arithmetic (e.g. 0.2+0.2+0.1+0.15+0.15) evaluates to
+# 1.0000000000000002 in float64 and trips a spurious "gross_exposure" violation.
+GROSS_EPSILON = 1e-9
+
+
 def sanitize_target_weights(
     raw_weights: Mapping[str, object],
     allowed_assets: Iterable[str],
@@ -37,7 +43,7 @@ def sanitize_target_weights(
         cleaned[asset_id] = value
 
     total = sum(cleaned.values())
-    if total > max_gross_exposure:
+    if total > max_gross_exposure + GROSS_EPSILON:
         violations.append("gross_exposure")
         scale = max_gross_exposure / total
         cleaned = {asset: value * scale for asset, value in cleaned.items()}

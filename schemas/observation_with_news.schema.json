@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://icaif2026.example/portfolio_agent/observation_with_news.schema.json",
+  "title": "ObservationWithNews",
+  "description": "Agent-visible point-in-time observation, news-enabled variant, as emitted by DailyTradingEvaluator.build_observation. All fields are point-in-time safe: nothing is dated after the decision cutoff (event_time_utc).",
+  "type": "object",
+  "required": ["session_date", "event_time_utc", "assets", "market_features", "fundamental_features", "portfolio", "constraints", "news"],
+  "additionalProperties": false,
+  "$defs": {
+    "featureMap": {
+      "description": "Ticker -> {feature_name: numeric|null}. Feature set is open; values are finite numbers or null when unavailable.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {"type": ["number", "boolean", "null"]}
+      }
+    },
+    "newsItem": {
+      "type": "object",
+      "required": ["provider", "provider_news_id", "published_at_utc", "available_at_utc", "ticker", "tickers", "company_names", "headline"],
+      "additionalProperties": true,
+      "properties": {
+        "provider": {"type": "string"},
+        "provider_news_id": {"type": "string"},
+        "published_at_utc": {"type": "string", "format": "date-time"},
+        "available_at_utc": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Time the organizer first observed the item. MUST be <= event_time_utc. This is the no-leakage boundary."
+        },
+        "ticker": {"type": ["string", "null"]},
+        "tickers": {"type": "array", "items": {"type": "string"}},
+        "company_names": {"type": "array", "items": {"type": "string"}},
+        "headline": {"type": "string"},
+        "summary": {"type": "string"},
+        "source": {"type": "string"},
+        "url": {"type": "string"},
+        "content_hash": {"type": "string"}
+      }
+    }
+  },
+  "properties": {
+    "session_date": {"type": "string", "format": "date"},
+    "event_time_utc": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Decision cutoff = close - decision_minutes_before_close. The point-in-time boundary for all data in this observation."
+    },
+    "assets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["ticker", "company_name", "sector", "open_price"],
+        "additionalProperties": true,
+        "properties": {
+          "ticker": {"type": "string"},
+          "company_name": {"type": "string"},
+          "sector": {"type": "string"},
+          "open_price": {"type": ["number", "null"], "description": "Same-day open; null if the asset did not trade."}
+        }
+      }
+    },
+    "market_features": {"$ref": "#/$defs/featureMap"},
+    "fundamental_features": {"$ref": "#/$defs/featureMap"},
+    "portfolio": {
+      "type": "object",
+      "required": ["weights", "cash_ratio", "nav"],
+      "additionalProperties": true,
+      "properties": {
+        "weights": {"type": "object", "additionalProperties": {"type": "number"}},
+        "cash_ratio": {"type": "number"},
+        "nav": {"type": "number", "minimum": 0}
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "required": ["long_only", "max_asset_weight", "max_gross_exposure"],
+      "additionalProperties": true,
+      "properties": {
+        "long_only": {"type": "boolean"},
+        "max_asset_weight": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "max_gross_exposure": {"type": "number", "exclusiveMinimum": 0},
+        "fee_rate": {"type": "number", "minimum": 0},
+        "slippage_bps": {"type": "number", "minimum": 0}
+      }
+    },
+    "news": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/newsItem"}
+    }
+  }
+}
