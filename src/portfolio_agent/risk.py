@@ -15,7 +15,7 @@ GROSS_EPSILON = 1e-9
 def sanitize_target_weights(
     raw_weights: Mapping[str, object],
     allowed_assets: Iterable[str],
-    max_asset_weight: float = 0.30,
+    max_asset_weight: float = 0.10,
     max_gross_exposure: float = 1.00,
 ) -> tuple[dict[str, float], list[str]]:
     allowed = set(allowed_assets)

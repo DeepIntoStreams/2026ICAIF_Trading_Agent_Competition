@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="login">
+  <form class="loginbox" method="post" action="{{ url_for('login') }}">
+    <div class="eyebrow">ACM ICAIF 2026</div>
+    <h1>Trading Agent Competition</h1>
+    <p>Log in, then each trading day submit your strategy's target weights. The platform stores
+      every observation, news pull, and submission for the audit trail — and never sees your code.</p>
+    <label for="team">Team name</label>
+    <input type="text" id="team" name="team" placeholder="e.g. Alpha Sharks" autocomplete="off" autofocus required>
+    <button class="btn block" type="submit">Enter competition &rarr;</button>
+    <p style="margin:16px 0 0;font-size:12px;color:var(--faint)">Demo: a one-month replay
+      (May 18 – Jun 18, 2026) · 23 trading days · 30 U.S. equities · $1,000,000 to start.</p>
+  </form>
+</div>
+{% endblock %}

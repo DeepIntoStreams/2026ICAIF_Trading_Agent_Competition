@@ -1,0 +1,2 @@
+# Frozen dependencies for reproducibility. Keep this minimal and pinned.
+# The example agent uses only the Python standard library.

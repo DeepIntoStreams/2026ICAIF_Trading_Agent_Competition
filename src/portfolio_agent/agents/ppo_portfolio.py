@@ -114,7 +114,7 @@ class PortfolioPolicy(nn.Module):
     def get_weights(
         self,
         features: torch.Tensor,
-        max_weight: float = 0.30,
+        max_weight: float = 0.10,
     ) -> torch.Tensor:
         """Deterministic weight extraction with cap projection."""
         with torch.no_grad():
@@ -184,7 +184,7 @@ class PPOPortfolioAgent(BaseAgent):
     def __init__(
         self,
         checkpoint_path: str | Path | None = None,
-        max_asset_weight: float = 0.30,
+        max_asset_weight: float = 0.10,
         feature_dim: int = FEATURE_DIM,
         embed_dim: int = 64,
         n_heads: int = 4,

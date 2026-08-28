@@ -225,3 +225,13 @@ data/
 outputs/
 tests/
 docs/
+# Competition platform generated artifacts (demo runs)
+competition/web/store/
+competition/web/state/
+competition/web/live_news/
+competition/web/live_store/
+competition/web/server.log
+competition/submissions/
+competition/requests/
+competition/posts/
+competition/backtests/

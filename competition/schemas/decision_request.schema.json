@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://icaif2026.example/portfolio_agent/decision_request.schema.json",
+  "title": "DecisionRequest",
+  "description": "Envelope the organizer server sends to a participant agent before each daily decision deadline.",
+  "type": "object",
+  "required": ["type", "protocol_version", "run_id", "team_id", "session_date", "deadline_utc", "observation"],
+  "additionalProperties": false,
+  "properties": {
+    "type": {"const": "decision_request"},
+    "protocol_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
+    "run_id": {"type": "string", "minLength": 1},
+    "team_id": {"type": "string", "minLength": 1},
+    "session_date": {"type": "string", "format": "date"},
+    "deadline_utc": {"type": "string", "format": "date-time"},
+    "observation": {
+      "description": "One of observation_with_news or observation_without_news, selected by run configuration.",
+      "type": "object"
+    }
+  }
+}

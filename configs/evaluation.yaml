@@ -13,7 +13,7 @@ evaluation:
 
 constraints:
   long_only: true
-  max_asset_weight: 0.30
+  max_asset_weight: 0.10
   max_gross_exposure: 1.00
 
 news:

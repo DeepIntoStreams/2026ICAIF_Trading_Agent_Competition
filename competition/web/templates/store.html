@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Data store · {{ team }}{% endblock %}
+{% block content %}
+<div class="wrap">
+  <div style="margin-bottom:18px">
+    <a class="link" href="{{ url_for('portal') }}">&larr; Back to portal</a>
+    <h1 style="font-size:24px;font-weight:700;margin-top:8px;letter-spacing:-.02em">What the platform has stored</h1>
+    <p style="color:var(--muted);margin:4px 0 0">Everything below is persisted on the server for the audit trail.</p>
+  </div>
+
+  <div class="cols">
+    <div class="card">
+      <h2>Official data <span class="sub">{{ official|length }} day(s) · news + prices</span></h2>
+      <div class="scroll" style="max-height:340px"><table>
+        <thead><tr><th>Date</th><th>Record</th></tr></thead><tbody>
+        {% for d in official %}
+          <tr><td>{{ d }}</td><td style="text-align:left"><a class="link" href="{{ url_for('store_official_view', date=d) }}">official/{{ d }}.json</a></td></tr>
+        {% else %}<tr><td colspan="2" class="empty">No days published yet.</td></tr>{% endfor %}
+        </tbody></table></div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>Your submissions <span class="sub">{{ subs|length }} · schema-valid decision_response</span></h2>
+        <div class="scroll" style="max-height:200px"><table>
+          <thead><tr><th>Date</th><th>Record</th></tr></thead><tbody>
+          {% for d in subs %}
+            <tr><td>{{ d }}</td><td style="text-align:left"><a class="link" href="{{ url_for('store_sub_view', date=d) }}">submissions/{{ team }}/{{ d }}.json</a></td></tr>
+          {% else %}<tr><td colspan="2" class="empty">No submissions stored yet.</td></tr>{% endfor %}
+          </tbody></table></div>
+      </div>
+      <div class="card">
+        <h2>Your proprietary data <span class="sub">{{ prop|length }} file(s) · private</span></h2>
+        <div class="body">
+          {% if prop %}<div class="hintline">{% for f in prop %}<span class="mono">{{ f }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</div>
+          {% else %}<div class="empty" style="padding:0">None uploaded. Optional — upload from the portal.</div>{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

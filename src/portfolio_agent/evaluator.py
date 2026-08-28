@@ -153,7 +153,7 @@ class WalkForwardEvaluator:
                 },
                 "constraints": {
                     "long_only": True,
-                    "max_asset_weight": 0.30,
+                    "max_asset_weight": 0.10,
                     "max_gross_exposure": 1.00,
                 },
             }

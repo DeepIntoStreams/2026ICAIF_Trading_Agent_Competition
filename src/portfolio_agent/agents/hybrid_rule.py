@@ -70,7 +70,7 @@ class HybridRuleAgent(BaseAgent):
         news_weight: float = 0.20,
         momentum_short_weight: float = 0.60,
         momentum_long_weight: float = 0.40,
-        max_asset_weight: float = 0.30,
+        max_asset_weight: float = 0.10,
     ):
         self.rebalance_frequency = rebalance_frequency
         self.max_positions = max_positions

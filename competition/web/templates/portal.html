@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}Day {{ day_no }} · {{ day.date }}{% endblock %}
+{% block content %}
+<div class="wrap">
+
+  {% if msg %}
+  <div class="{{ 'flash' if msg.kind=='ok' else 'flasherr' }}">
+    <b>{{ msg.title }}</b>
+    {% for l in msg.lines %}<div class="ln">{{ l }}</div>{% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="summary">
+    <div class="item"><div class="k">Trading day</div><div class="v mono">{{ day_no }} / {{ n_days }}</div></div>
+    <div class="item"><div class="k">Date</div><div class="v">{{ day.date }}</div></div>
+    <div class="item"><div class="k">Portfolio value</div>
+      <div class="v mono {{ 'pos' if nav >= initial else 'neg' }}">${{ '{:,.0f}'.format(nav) }}</div></div>
+    <div class="item"><div class="k">Cash</div><div class="v mono">{{ '{:.0f}%'.format(cash_ratio*100) }}</div></div>
+    <div class="item"><div class="k">Data stored</div><div class="v mono">{{ n_official }} days</div></div>
+    <div class="progress"><div class="k" style="font-size:11px;color:var(--faint);font-weight:600;text-transform:uppercase">Progress</div>
+      <div class="track"><div class="fill" style="width:{{ (day_no/n_days*100)|round(0) }}%"></div></div>
+      <a class="link" href="{{ url_for('store_view') }}" style="font-size:12.5px;font-weight:600">View data store &rarr;</a></div>
+  </div>
+
+  <div class="cols">
+    <!-- observation (stored official data) -->
+    <div>
+      <div class="card">
+        <h2>Official market data <span class="sub">stored · decide by {{ day.cutoff }} ET</span></h2>
+        <div class="scroll"><table>
+          <thead><tr><th>Ticker</th><th>Sector</th><th>Open</th><th>Mom 60d</th><th>Vol 20d</th></tr></thead>
+          <tbody>
+          {% for t, a in assets %}
+            <tr><td class="tk">{{ t }}</td><td class="sec">{{ a.sec.replace('_',' ') }}</td>
+              <td class="mono">${{ '%.2f'|format(a.open) }}</td>
+              <td class="mono {{ 'pos' if a.mom>=0 else 'neg' }}">{{ '{:+.1f}%'.format(a.mom*100) }}</td>
+              <td class="mono">{{ '%.2f'|format(a.vol*100) }}</td></tr>
+          {% endfor %}
+          </tbody></table></div>
+      </div>
+      <div class="card">
+        <h2>News retrieved &amp; stored <span class="sub">{{ news|length }} items · <a class="link" href="{{ url_for('store_official_view', date=day.date) }}">raw record</a></span></h2>
+        <div class="news">
+          {% for n in news %}
+            <div class="nrow"><span class="tk">{{ n.tk }}</span><span class="tm">{{ n.at }}</span>
+              <span>{% if n.url %}<a class="hl" href="{{ n.url }}" target="_blank" rel="noopener">{{ n.h }}</a>{% else %}{{ n.h }}{% endif %}
+                <span class="src">· {{ n.src }}</span></span></div>
+          {% else %}
+            <div class="empty">No public filings retrieved before today's cutoff.</div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <!-- submit + proprietary -->
+    <div>
+      <div class="card">
+        <h2>Submit your output <span class="sub">decision_response · schema-validated</span></h2>
+        <div class="body">
+          <div class="fmt">Submit a <b>decision_response</b> that follows
+            <span class="mono">schemas/decision_response.schema.json</span>. Paste it or upload a
+            <span class="mono">.json</span> file; the server validates the schema, then repairs
+            any out-of-range weights (counts toward M9).</div>
+          <div class="chips">
+            <button type="button" class="chip" onclick="fill(6)">Top 6 momentum</button>
+            <button type="button" class="chip" onclick="fill(10)">Top 10 momentum</button>
+            <button type="button" class="chip" onclick="fill(0)">All cash</button>
+          </div>
+          <form method="post" action="{{ url_for('submit') }}" enctype="multipart/form-data">
+            <textarea id="response" name="response" spellcheck="false">{{ default_json }}</textarea>
+            <div class="hintline" id="hint"></div>
+            <div class="uprow">
+              <span class="orfile">…or upload a file:</span>
+              <label class="filebtn" for="responsefile">Choose .json file</label>
+              <input type="file" id="responsefile" name="responsefile" accept=".json,application/json"
+                     hidden onchange="fname(this,'fn1')">
+              <span class="filename" id="fn1">No file chosen</span>
+            </div>
+            <div class="actions">
+              <button class="btn" type="submit">Validate, store &amp; settle at next open &rarr;</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Proprietary data <span class="sub">optional · private to your team</span></h2>
+        <div class="body">
+          <div class="fmt">Upload your own public-source news or features (CSV / JSON). Stored
+            privately for your team and kept for the audit. Optional.</div>
+          <form method="post" action="{{ url_for('upload_data') }}" enctype="multipart/form-data" class="uprow">
+            <label class="filebtn" for="propdata">Choose file</label>
+            <input type="file" id="propdata" name="propdata" hidden onchange="fname(this,'fn2')">
+            <span class="filename" id="fn2">No file chosen</span>
+            <button class="btn ghost" type="submit">Upload &amp; store</button>
+          </form>
+          {% if proprietary %}
+            <div class="hintline" style="margin-top:12px">Stored: {% for f in proprietary %}<span class="mono">{{ f }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- audit -->
+  <div class="card audit">
+    <h2>Audit trail — stored by the organizer <span class="sub">{{ audit|length }} record(s)</span></h2>
+    <div class="scroll" style="max-height:300px"><table>
+      <thead><tr><th>Date</th><th>News</th><th>Weights submitted</th><th>Repairs (M9)</th><th>Executed</th><th>NAV (close)</th></tr></thead>
+      <tbody>
+      {% for a in audit %}
+        <tr><td>{{ a.date }}</td><td class="mono">{{ a.news }}</td>
+          <td class="w">{% for t, w in a.weights.items() %}{{ t }} {{ '{:.0f}%'.format(w*100) }}{% if not loop.last %}, {% endif %}{% endfor %}{% if not a.weights %}all cash{% endif %}</td>
+          <td>{% if a.violations %}<span class="badge warn">{{ a.violations|length }}</span>{% else %}<span class="badge">0</span>{% endif %}</td>
+          <td class="w">{{ a.exec }}</td>
+          <td class="mono">{% if a.nav %}${{ '{:,.0f}'.format(a.nav) }}{% else %}—{% endif %}</td></tr>
+      {% else %}
+        <tr><td colspan="6" class="empty">No submissions yet. Submit today's decision_response above.</td></tr>
+      {% endfor %}
+      </tbody></table></div>
+  </div>
+</div>
+
+<script>
+const TICKERS = {{ top_tickers|safe }};
+function fill(n){
+  const ta = document.getElementById("response");
+  let doc; try{ doc = JSON.parse(ta.value); }catch(e){ doc = {type:"decision_response"}; }
+  const w = {};
+  if(n){ const each=+(0.9/n).toFixed(3); TICKERS.slice(0,n).forEach(t=>w[t]=each); }
+  doc.target_weights = w;
+  ta.value = JSON.stringify(doc, null, 2);
+  hint();
+}
+function hint(){
+  const el = document.getElementById("hint");
+  try{
+    const doc = JSON.parse(document.getElementById("response").value || "{}");
+    const w = doc.target_weights || {};
+    const s = Object.values(w).reduce((a,b)=>a+(+b||0),0);
+    const bad = Object.values(w).some(v=>v>0.10||v<0) || s>1.0001;
+    el.textContent = Object.keys(w).length + " positions · " + (s*100).toFixed(0) +
+      "% invested · " + Math.max(0,(100-s*100)).toFixed(0) + "% cash";
+    el.style.color = bad ? "var(--warn)" : "var(--muted)";
+  }catch(e){ el.textContent = "⚠ not valid JSON"; el.style.color="var(--warn)"; }
+}
+document.getElementById("response").addEventListener("input", hint);
+hint();
+function fname(inp, id){
+  document.getElementById(id).textContent = inp.files.length ? inp.files[0].name : "No file chosen";
+}
+</script>
+{% endblock %}

@@ -1,0 +1,8 @@
+{
+  "team_id": "team_example",
+  "entrypoint": "agent.py",
+  "agent_class": "Agent",
+  "agent_version": "example-momentum-1.0",
+  "python": "3.10",
+  "notes": "Example momentum + low-vol allocator. Replace with your alpha."
+}

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en" translate="no">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="google" content="notranslate">
+<title>{% block title %}Trading Agent Competition{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<nav class="nav"><div class="inner">
+  <div class="brand"><span class="mark">Q</span>
+    <span>Trading Agent Competition<small>ACM ICAIF 2026 · participant portal</small></span></div>
+  <div class="sp"></div>
+  {% if session.team %}
+    <a class="link" href="{{ url_for('reset') }}" onclick="return confirm('Restart from day 1?')">Restart</a>
+    <div class="team"><span class="av">{{ session.team[0]|upper }}</span>{{ session.team }}</div>
+    <a class="link" href="{{ url_for('logout') }}">Log out</a>
+  {% endif %}
+</div></nav>
+{% block content %}{% endblock %}
+</body>
+</html>

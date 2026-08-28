@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Results · {{ team }}{% endblock %}
+{% block content %}
+<div class="wrap">
+  <div class="result-head">
+    <div>
+      <div class="k" style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--faint)">Final result · {{ team }}</div>
+      <div class="big {{ 'pos' if metrics.m1_cumulative_return>=0 else 'neg' }}">{{ '{:+.2f}%'.format(metrics.m1_cumulative_return*100) }}</div>
+      <div class="mono" style="color:var(--muted)">${{ '{:,.0f}'.format(nav) }} final value</div>
+    </div>
+    <div style="text-align:right">
+      <div class="k" style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--faint)">Your rank</div>
+      <div class="big">#{{ your_rank }} <span style="font-size:20px;color:var(--faint)">of {{ n }}</span></div>
+    </div>
+  </div>
+
+  <div class="tiles">
+    <div class="tile"><div class="k">Return (M1)</div><div class="v {{ 'pos' if metrics.m1_cumulative_return>=0 else 'neg' }}">{{ '{:+.2f}%'.format(metrics.m1_cumulative_return*100) }}</div></div>
+    <div class="tile"><div class="k">Sharpe (M3)</div><div class="v">{{ '%.2f'|format(metrics.m3_sharpe_ratio or 0) }}</div></div>
+    <div class="tile"><div class="k">Max DD (M5)</div><div class="v">{{ '{:.1f}%'.format(metrics.m5_maximum_drawdown*100) }}</div></div>
+    <div class="tile"><div class="k">Win rate (M2)</div><div class="v">{{ '{:.0f}%'.format(metrics.m2_daily_win_rate*100) }}</div></div>
+    <div class="tile"><div class="k">Sortino (M4)</div><div class="v">{{ '%.2f'|format(metrics.m4_sortino_ratio or 0) }}</div></div>
+    <div class="tile"><div class="k">Violations (M9)</div><div class="v">{{ '{:.0f}%'.format(metrics.m9_violation_rate*100) }}</div></div>
+  </div>
+
+  <div class="card"><div class="body">
+    <h3 style="font-size:15px;margin-bottom:4px">Leaderboard</h3>
+    <p style="color:var(--muted);font-size:13.5px;margin:0 0 14px">Average rank across all nine metrics — lowest wins.</p>
+    <div class="lb">
+      {% for f in field %}
+        <div class="lbrow {{ 'you' if f.you else '' }}">
+          <div class="r">{{ loop.index }}</div>
+          <div class="nm">{{ f.team }}{% if f.you %} (you){% endif %}</div>
+          <div class="mono" style="text-align:right;{{ 'color:var(--gain)' if f.metrics.m1_cumulative_return>=0 else 'color:var(--loss)' }}">{{ '{:+.2f}%'.format(f.metrics.m1_cumulative_return*100) }}</div>
+          <div class="mono" style="text-align:right;color:var(--accent-ink)">rank {{ '%.2f'|format(f.avg) }}</div>
+        </div>
+      {% endfor %}
+    </div>
+    <div class="note">The winner isn't necessarily the highest return — it's the best <b>average rank</b>
+      across profitability, risk, and execution. Your code was never uploaded; only your submitted
+      weights and the audit trail were stored.</div>
+    <div class="actions" style="margin-top:18px">
+      <a class="btn ghost" href="{{ url_for('reset') }}">Run again from day 1</a>
+    </div>
+  </div></div>
+</div>
+{% endblock %}

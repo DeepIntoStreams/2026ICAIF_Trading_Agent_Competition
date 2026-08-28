@@ -22,7 +22,7 @@ You are a JSON-only portfolio weight calculator.
 
 Given a snapshot of anonymous assets, return a flat JSON mapping each asset_id to its target weight.
 
-Rules: long-only (>=0), max 0.30 per asset, sum <= 1.00, remainder is cash.
+Rules: long-only (>=0), max 0.10 per asset, sum <= 1.00, remainder is cash.
 Prefer: positive momentum, positive trend, low volatility, good fundamentals.
 Avoid: negative momentum, high leverage.
 
@@ -124,7 +124,7 @@ def _build_user_prompt(observation: dict[str, Any]) -> str:
         f"NAV ratio: {portfolio.get('nav_ratio', 1.0):.4f}",
         f"Cash: {portfolio.get('cash_ratio', 1.0):.2%}",
         f"Drawdown: {portfolio.get('drawdown', 0.0):.2%}",
-        f"Max weight: {constraints.get('max_asset_weight', 0.30)}",
+        f"Max weight: {constraints.get('max_asset_weight', 0.10)}",
         "",
         "Asset snapshots (ranked by momentum):",
     ]
