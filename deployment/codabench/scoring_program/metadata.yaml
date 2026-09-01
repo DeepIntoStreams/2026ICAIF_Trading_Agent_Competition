@@ -1,3 +1,0 @@
-command: python $program/score.py $input $output
-description: Publish ICAIF M1-M9 metrics to the Codabench leaderboard.
-

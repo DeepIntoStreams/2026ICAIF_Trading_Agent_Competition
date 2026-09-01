@@ -1,3 +1,0 @@
-command: python $program/run.py --submission $submission_program --input $input --output $output --hidden $hidden
-description: Run a submitted ICAIF alpha with the official next-open evaluator.
-

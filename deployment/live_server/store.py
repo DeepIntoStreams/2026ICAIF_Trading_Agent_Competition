@@ -194,12 +194,18 @@ class LiveStore:
         board = []
         for row in self.db.execute("SELECT team_id, state_json FROM states"):
             st = json.loads(row["state_json"])
-            metrics = compute_metrics(st["nav"], initial_capital=INITIAL_CASH,
-                                      total_transaction_cost=st["total_cost"],
-                                      total_trade_value=st["total_traded"],
-                                      violation_steps=st["violation_days"],
-                                      decision_steps=st["decision_days"])
+            metrics = None
+            if len(st["nav"]) >= 2:
+                metrics = compute_metrics(st["nav"], initial_capital=INITIAL_CASH,
+                                          total_transaction_cost=st["total_cost"],
+                                          total_trade_value=st["total_traded"],
+                                          violation_steps=st["violation_days"],
+                                          decision_steps=st["decision_days"])
             board.append({"team_id": row["team_id"], "metrics": metrics,
-                          "nav": st["nav"][-1]})
-        board.sort(key=lambda x: x["metrics"]["m1_cumulative_return"], reverse=True)
+                          "nav": st["nav"][-1],
+                          "status": "ranked" if metrics is not None else "pending"})
+        board.sort(key=lambda x: (
+            x["metrics"] is not None,
+            x["metrics"]["m1_cumulative_return"] if x["metrics"] else float("-inf"),
+        ), reverse=True)
         return board

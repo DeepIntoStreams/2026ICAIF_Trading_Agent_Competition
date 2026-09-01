@@ -1,9 +1,0 @@
-.git
-data
-data.zip
-outputs
-competition/web/state
-competition/web/store
-__pycache__
-*.pyc
-

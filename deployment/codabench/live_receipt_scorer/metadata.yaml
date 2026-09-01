@@ -1,3 +1,0 @@
-command: python $program/score.py $input $output
-description: Validate a live weight submission; settlement happens in the live server.
-
