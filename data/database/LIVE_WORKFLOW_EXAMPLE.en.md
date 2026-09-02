@@ -73,7 +73,7 @@ class SimulatedTrade:
     cash_change: Decimal
 ```
 
-Production money calculations should use `Decimal` or fixed-precision database types. The current SQLite schema uses `REAL` for prototype convenience; a PostgreSQL migration should use appropriately sized `NUMERIC` columns.
+Business calculations should use `Decimal`; PostgreSQL stores money, quantity, and weight values as `NUMERIC(28, 12)` to avoid binary floating-point ambiguity.
 
 ## 3. Static setup
 

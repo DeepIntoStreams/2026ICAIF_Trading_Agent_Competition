@@ -440,6 +440,7 @@ An execution has `effective_at` and `processed_at`. Retrying a batch checks the
 unique `(submission_id)` execution constraint and its status before writing, so a
 completed execution cannot be charged twice.
 
-SQLite is the shared local-development database. Production should migrate the
-same logical schema to PostgreSQL before using multiple API workers or concurrent
-settlement workers.
+PostgreSQL is the only supported database baseline for local integration,
+staging, and production. Developers run the same major PostgreSQL version in
+Docker, avoiding dialect and concurrency differences between development and
+the live service.

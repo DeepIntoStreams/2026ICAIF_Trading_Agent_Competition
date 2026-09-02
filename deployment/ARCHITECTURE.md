@@ -15,7 +15,7 @@ participant agent + official client
               |
               | team API key
               v
-       competition server  --------> SQLite (development) / PostgreSQL (production)
+       competition server  --------> PostgreSQL 16 (local / staging / production)
               |                         observations, decisions, states, audit, leaderboard
               +---- validation: historical clock advances immediately
               +---- official: real NYSE clock advances once per trading day
@@ -142,15 +142,16 @@ The target model separates definitions from per-team mutable state:
 - `leaderboard_snapshots`: reproducible derived outputs;
 - `audit_events`: administrative and participant security events.
 
-SQLite is appropriate for the interface prototype and a single-process rehearsal. Production
-should use PostgreSQL before multiple API workers or scheduled settlement jobs are introduced.
+PostgreSQL 16 is the single supported database baseline. Local development uses the same major
+version through Docker, so transaction, locking, JSONB, numeric, and concurrency behavior does
+not change between development and production.
 
 ## 7. Hosting decision
 
 The competition server is deployed on organizer-controlled infrastructure, not "to Codabench".
 A rented cloud VM is a reasonable staging starting point. Production selection should consider
 region/latency, managed PostgreSQL, object storage, TLS/load balancer, backups, monitoring, and
-failure recovery. A single VM plus SQLite is not the final high-availability design.
+failure recovery.
 
 Codabench may separately receive final code archives and later display mirrored leaderboard
 values. Whether its organizer API is convenient for automated score updates is an integration
@@ -167,4 +168,3 @@ experiment, not a dependency for the core server.
 - final metric aggregation and audit/disqualification policy;
 - production market/fundamental source and correction policy;
 - Codabench identity reconciliation, final archive format, and leaderboard mirroring.
-

@@ -1,8 +1,8 @@
 # Competition API quick start (interface draft v0.1)
 
-This is the runnable subset of the unified protocol. `ARCHITECTURE.md` defines the target run
-model that will add fast historical Validation episodes without changing the observation or
-decision envelopes.
+This is the participant interface draft. The previous SQLite prototype implements
+an older version for reference, but the HTTP service is temporarily disabled in
+Compose until its persistence layer is migrated to the PostgreSQL contract.
 
 ## Authentication
 
@@ -10,14 +10,10 @@ API keys are issued by the organizer, not self-created by participants and not o
 public endpoint. The operational flow is:
 
 1. Organizer freezes a unique `team_id` for every approved team.
-2. Organizer runs the registration command once:
+2. The organizer registration service creates the PostgreSQL team row and returns
+   a plaintext key once. This service is the next persistence-layer increment.
 
-```bash
-PYTHONPATH=src python -m deployment.live_server.manage \
-  --db /data/competition.sqlite3 register-team team_001
-```
-
-3. The command prints a high-entropy plaintext key exactly once. Only its SHA-256 hash is stored.
+3. Registration prints a high-entropy plaintext key exactly once. Only its SHA-256 hash is stored.
 4. Organizer sends that key to the team through an authenticated private channel.
 5. The team stores it in `COMPETITION_API_KEY`; it must not be committed to Git or placed in a URL.
 6. Participant requests send it as a Bearer token. The server derives the team from the key, so

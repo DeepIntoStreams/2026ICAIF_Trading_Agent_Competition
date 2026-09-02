@@ -1,45 +1,45 @@
 #!/usr/bin/env python3
-"""Create and validate a local SQLite competition database."""
+"""Apply and validate the PostgreSQL live-competition schema."""
 
 from __future__ import annotations
 
 import argparse
-import sqlite3
+import os
 from pathlib import Path
 
+import psycopg
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_DB = HERE / "competition.sqlite3"
 SCHEMA = HERE / "schema.sql"
+DEFAULT_URL = "postgresql://competition:competition@127.0.0.1:5432/competition"
 
 
-def initialize(db_path: Path) -> None:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+def initialize(database_url: str) -> None:
     schema = SCHEMA.read_text(encoding="utf-8")
-    with sqlite3.connect(db_path) as connection:
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.executescript(schema)
-        integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
-        foreign_key_errors = connection.execute("PRAGMA foreign_key_check").fetchall()
-        if integrity != "ok":
-            raise RuntimeError(f"SQLite integrity check failed: {integrity}")
-        if foreign_key_errors:
-            raise RuntimeError(f"SQLite foreign-key check failed: {foreign_key_errors}")
-        table_count = connection.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-        ).fetchone()[0]
-        view_count = connection.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'view'"
-        ).fetchone()[0]
-    print(f"Database ready: {db_path.resolve()}")
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(schema)
+            cursor.execute(
+                "SELECT COUNT(*) FROM information_schema.tables "
+                "WHERE table_schema='public' AND table_type='BASE TABLE'"
+            )
+            table_count = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT COUNT(*) FROM information_schema.views WHERE table_schema='public'"
+            )
+            view_count = cursor.fetchone()[0]
+    print("PostgreSQL database ready")
     print(f"Schema objects: {table_count} tables, {view_count} views")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument(
+        "--database-url",
+        default=os.environ.get("COMPETITION_DATABASE_URL", DEFAULT_URL),
+    )
     args = parser.parse_args()
-    initialize(args.db)
+    initialize(args.database_url)
     return 0
 
 

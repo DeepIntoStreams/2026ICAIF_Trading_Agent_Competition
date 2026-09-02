@@ -77,7 +77,7 @@ class SimulatedTrade:
     cash_change: Decimal
 ```
 
-生产实现应优先用 `Decimal` 或数据库定点数值，而不是让金额计算依赖二进制浮点数。当前 SQLite schema 使用 `REAL` 便于原型开发；迁移 PostgreSQL 时应改为合适精度的 `NUMERIC`。
+业务代码应使用 `Decimal`，数据库使用 PostgreSQL `NUMERIC(28, 12)`，避免金额、数量和权重依赖二进制浮点数。
 
 ## 3. 初始化比赛静态数据
 

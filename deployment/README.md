@@ -1,73 +1,59 @@
-# ICAIF 2026 competition server
+# ICAIF 2026 competition deployment
 
-This directory contains the organizer-operated service for both Validation and the Official
-Competition. Participants always run agents locally. The server authenticates teams, serves
-official observations and private portfolio state, accepts target weights, performs deterministic
-next-open settlement, and stores local leaderboard results.
+PostgreSQL 16 is the single database baseline for local integration, staging,
+and production. SQLite is no longer part of the target architecture.
 
-Codabench is not part of the runtime path. A future isolated integration may use it for final
-code-archive intake or mirror organizer-computed leaderboard values.
+## Current implementation boundary
 
-## Current layout
+The PostgreSQL schema and reproducible local database bootstrap are ready. The
+existing `deployment/live_server/store.py` is the previous SQLite API prototype
+and is deliberately not started by the new Compose file. It must be replaced by
+repositories and services implementing the PostgreSQL contract before the HTTP
+server is considered runnable again. This prevents accidental operation against
+the obsolete four-table state model.
+
+The target flow is documented in:
+
+- `../data/database/README.md`
+- `../data/database/LIVE_WORKFLOW_EXAMPLE.en.md`
+- `../data/database/LIVE_WORKFLOW_EXAMPLE.zh-CN.md`
+
+## Start the local PostgreSQL database
+
+```bash
+docker compose -f deployment/docker-compose.yml up -d postgres
+docker compose -f deployment/docker-compose.yml run --rm schema-init
+```
+
+Default local connection:
 
 ```text
-deployment/
-  README.md
-  ARCHITECTURE.md       system boundary, shared state machine, hosting and security design
-  API.md                runnable v0.1 HTTP interface and examples
-  Validation_and_Official_Competition_Interaction_Logic.pdf
-  docker-compose.yml
-  starter_kit/         participant HTTP client and replaceable mock agent
-  live_server/          legacy package name; currently the unified competition service
-    app.py              participant and organizer HTTP endpoints
-    store.py            SQLite identity, sessions, decisions, settlement and leaderboard
-    manage.py           local organizer CLI
-    Dockerfile
-  tests/
-    test_live_store.py
+postgresql://competition:competition@127.0.0.1:5432/competition
 ```
 
-The `live_server` package name is retained temporarily to avoid a noisy rename while the API is
-still evolving. Its responsibility is no longer limited to the live phase.
+Override `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and
+`POSTGRES_PORT` in an uncommitted `.env` when needed. Production must use managed
+secrets and a non-default password.
 
-## Phase model
-
-Validation and Official Competition use the same authentication, observation, decision, risk,
-next-open execution, transaction-cost, and metric logic.
-
-- Validation rapidly advances through a configured historical episode and permits multiple
-  attempts.
-- Official Competition advances through the same state machine once per real trading day and
-  accepts one official decision per team/session.
-
-The historical Validation run/episode controller is the next implementation increment. The
-current runnable subset covers authentication, published-session observations, decisions,
-next-open settlement, state, and local leaderboard computation.
-
-## Local start
-
-With Docker:
+Without Docker, point the initializer at an existing PostgreSQL 16 instance:
 
 ```bash
-COMPETITION_ADMIN_TOKEN='replace-with-a-long-random-secret' docker compose \
-  -f deployment/docker-compose.yml up --build
+export COMPETITION_DATABASE_URL='postgresql://user:password@host:5432/database'
+python data/database/init_db.py
 ```
 
-For direct Python development, install project dependencies and run:
+## Verify the schema
 
 ```bash
-COMPETITION_ADMIN_TOKEN='replace-with-a-long-random-secret' PYTHONPATH=src \
-  python -m deployment.live_server.app --db /tmp/competition.sqlite3
+psql "$COMPETITION_DATABASE_URL" -c '\dt'
+psql "$COMPETITION_DATABASE_URL" -c '\dv'
 ```
 
-Register a team and securely save the API key printed once:
+Expected result: 15 application tables and 3 convenience views.
 
-```bash
-PYTHONPATH=src python -m deployment.live_server.manage \
-  --db /tmp/competition.sqlite3 register-team team_001
-```
+## Next implementation step
 
-See `API.md` for participant requests and `ARCHITECTURE.md` for production gates.
-
-When running locally, interactive FastAPI documentation is available at
-`http://127.0.0.1:8080/docs`; the OpenAPI contract is at `/openapi.json`.
+Replace the legacy `LiveStore` with PostgreSQL repositories, then implement the
+two-transaction submission/weight handoff and end-of-day execution workflow.
+The HTTP API must not be re-enabled in Compose until it reads and writes the new
+schema exclusively.

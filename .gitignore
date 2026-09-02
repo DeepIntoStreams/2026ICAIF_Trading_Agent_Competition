@@ -228,9 +228,6 @@ data/*
 !data/README.md
 !data/database/
 !data/database/**
-data/database/*.sqlite3
-data/database/*.sqlite3-*
-data/database/*.db
 data/datasets/
 data/imports/
 outputs/
