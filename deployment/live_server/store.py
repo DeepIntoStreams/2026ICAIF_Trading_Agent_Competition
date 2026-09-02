@@ -111,6 +111,39 @@ class LiveStore:
         }
         return obs
 
+    def team_status(self, team_id: str) -> dict[str, Any]:
+        """Return the small polling payload a participant needs before requesting data."""
+        session = self.session()
+        state = self.state(team_id)
+        submission = None
+        if session:
+            row = self.db.execute(
+                "SELECT source_id, received_at, accepted, reason FROM submissions "
+                "WHERE team_id=? AND session_date=? ORDER BY received_at DESC LIMIT 1",
+                (team_id, session["session_date"]),
+            ).fetchone()
+            if row:
+                submission = {
+                    "id": row["source_id"], "received_at": row["received_at"],
+                    "accepted": bool(row["accepted"]), "reason": row["reason"],
+                }
+        return {
+            "team_id": team_id,
+            "server_time_utc": datetime.now(timezone.utc).isoformat(),
+            "session": None if not session else {
+                "session_date": session["session_date"],
+                "deadline_utc": session["deadline_utc"],
+                "settled": session["settled"],
+                "observation_available": True,
+                "decision_accepted": bool(submission and submission["accepted"]),
+            },
+            "latest_submission": submission,
+            "portfolio": {
+                "nav": state["nav"][-1],
+                "last_settled": state["last_settled"],
+            },
+        }
+
     def submit(self, source_id: str, authenticated_team: str, document: dict[str, Any],
                received_at: str | None = None) -> dict[str, Any]:
         existing = self.db.execute("SELECT * FROM submissions WHERE source_id=?", (source_id,)).fetchone()

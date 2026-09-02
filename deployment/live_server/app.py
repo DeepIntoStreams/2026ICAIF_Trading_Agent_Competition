@@ -1,95 +1,141 @@
-"""Minimal authenticated HTTP API for the unified competition service."""
+"""FastAPI application for the unified competition service."""
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import re
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from typing import Any, Optional
+
+import uvicorn
+from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, ConfigDict, Field
 
 from .store import LiveStore
 
 
-def handler_for(store: LiveStore, admin_token: str):
-    class Handler(BaseHTTPRequestHandler):
-        def reply(self, status: int, body):
-            payload = json.dumps(body, default=str).encode()
-            self.send_response(status); self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload)
+class DecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-        def body(self):
-            size = int(self.headers.get("Content-Length", "0"))
-            if size > 1_000_000: raise ValueError("request too large")
-            return json.loads(self.rfile.read(size) or b"{}")
+    type: str = Field(pattern="^decision_response$")
+    protocol_version: str = Field(pattern=r"^[0-9]+\.[0-9]+$")
+    run_id: str = Field(min_length=1)
+    session_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    target_weights: dict[str, float]
+    team_id: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
 
-        def auth(self, team):
-            token = self.headers.get("Authorization", "").removeprefix("Bearer ")
-            return store.authenticate(team, token)
 
-        def team(self):
-            value = self.headers.get("Authorization", "")
-            if not value.startswith("Bearer "):
-                return None
-            return store.team_for_api_key(value.removeprefix("Bearer "))
+class SessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    observation: dict[str, Any]
+    market: dict[str, Any]
 
-        def admin(self):
-            return self.headers.get("Authorization") == f"Bearer {admin_token}"
 
-        def do_GET(self):
-            path = urlparse(self.path).path
-            if path == "/health": return self.reply(200, {"status": "ok"})
-            if path == "/api/v1/leaderboard": return self.reply(200, store.leaderboard())
-            if path in ("/api/v1/me/observation", "/api/v1/me/state"):
-                team = self.team()
-                if not team: return self.reply(401, {"error": "unauthorized"})
-                value = store.team_observation(team) if path.endswith("observation") else store.state(team)
-                return self.reply(200 if value else 404, value or {"error": "not_found"})
-            match = re.fullmatch(r"/api/v1/teams/([^/]+)/(observation|state)", path)
-            if match and self.auth(match.group(1)):
-                value = store.team_observation(match.group(1)) if match.group(2) == "observation" \
-                        else store.state(match.group(1))
-                return self.reply(200 if value else 404, value or {"error": "not_found"})
-            return self.reply(401 if match else 404, {"error": "unauthorized" if match else "not_found"})
+class SettlementRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
 
-        def do_POST(self):
-            path = urlparse(self.path).path
-            try: doc = self.body()
-            except (ValueError, json.JSONDecodeError) as exc: return self.reply(400, {"error": str(exc)})
-            if path == "/api/v1/decisions":
-                team = self.team()
-                if not team: return self.reply(401, {"error": "unauthorized"})
-                source_id = self.headers.get("Idempotency-Key")
-                if not source_id:
-                    return self.reply(400, {"error": "missing_idempotency_key"})
-                result = store.submit(source_id, team, doc)
-                return self.reply(201 if result["accepted"] else 422, result)
-            if path == "/api/v1/admin/submissions/import" and self.admin():
-                result = store.submit(doc["source_id"], doc["authenticated_team"],
-                                      doc["submission"], doc.get("received_at"))
-                return self.reply(200 if result["accepted"] else 422, result)
-            if path == "/api/v1/admin/sessions" and self.admin():
-                store.publish(doc["observation"], doc["market"]); return self.reply(201, {"published": True})
-            if path == "/api/v1/admin/settle" and self.admin():
-                return self.reply(200, store.settle(doc["session_date"]))
-            return self.reply(401 if path.startswith("/api/v1/admin") else 404, {"error": "unauthorized"})
 
-        def log_message(self, fmt, *args):
-            print("[live-api]", fmt % args)
-    return Handler
+bearer = HTTPBearer(auto_error=False)
+
+
+def create_app(store: LiveStore, admin_token: str) -> FastAPI:
+    app = FastAPI(
+        title="ICAIF 2026 Competition API",
+        version="0.1.0",
+        description=(
+            "Team-authenticated observation, status and decision API shared by Validation "
+            "and the Official Competition. Participant agents always run locally."
+        ),
+    )
+
+    def authenticated_team(
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+    ) -> str:
+        if not credentials or credentials.scheme.lower() != "bearer":
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                                detail="invalid or missing API key")
+        team = store.team_for_api_key(credentials.credentials)
+        if not team:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                                detail="invalid or missing API key")
+        return team
+
+    def require_admin(
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+    ) -> None:
+        if not credentials or credentials.credentials != admin_token:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                                detail="invalid organizer credential")
+
+    @app.get("/health", tags=["system"])
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/api/v1/me/status", tags=["participant"])
+    def team_status(team: str = Depends(authenticated_team)) -> dict[str, Any]:
+        return store.team_status(team)
+
+    @app.get("/api/v1/me/observation", tags=["participant"])
+    def observation(team: str = Depends(authenticated_team)) -> dict[str, Any]:
+        value = store.team_observation(team)
+        if value is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="no observation is currently available")
+        return value
+
+    @app.get("/api/v1/me/state", tags=["participant"])
+    def state(team: str = Depends(authenticated_team)) -> dict[str, Any]:
+        return store.state(team)
+
+    @app.post("/api/v1/decisions", status_code=status.HTTP_201_CREATED,
+              tags=["participant"])
+    def submit_decision(
+        document: DecisionRequest,
+        team: str = Depends(authenticated_team),
+        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    ) -> dict[str, Any]:
+        if not idempotency_key or len(idempotency_key) > 200:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="a valid Idempotency-Key header is required")
+        result = store.submit(idempotency_key, team, document.model_dump(exclude_none=True))
+        if not result["accepted"]:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result)
+        return result
+
+    @app.get("/api/v1/leaderboard", tags=["public"])
+    def leaderboard() -> list[dict[str, Any]]:
+        return store.leaderboard()
+
+    @app.post("/api/v1/admin/sessions", status_code=status.HTTP_201_CREATED,
+              dependencies=[Depends(require_admin)], tags=["organizer"])
+    def load_session(document: SessionRequest) -> dict[str, bool]:
+        store.publish(document.observation, document.market)
+        return {"loaded": True}
+
+    @app.post("/api/v1/admin/settle", dependencies=[Depends(require_admin)],
+              tags=["organizer"])
+    def settle(document: SettlementRequest) -> list[dict[str, Any]]:
+        try:
+            return store.settle(document.session_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return app
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default=os.environ.get("LIVE_DB", "live.sqlite3"))
-    ap.add_argument("--host", default="127.0.0.1"); ap.add_argument("--port", type=int, default=8080)
-    args = ap.parse_args()
-    token = os.environ.get("LIVE_ADMIN_TOKEN")
-    if not token: raise SystemExit("LIVE_ADMIN_TOKEN is required")
-    server = ThreadingHTTPServer((args.host, args.port), handler_for(LiveStore(args.db), token))
-    print(f"live API listening on http://{args.host}:{args.port}")
-    server.serve_forever(); return 0
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--db", default=os.environ.get("COMPETITION_DB", "competition.sqlite3"))
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8080)
+    args = parser.parse_args()
+    admin_token = os.environ.get("COMPETITION_ADMIN_TOKEN")
+    if not admin_token:
+        raise SystemExit("COMPETITION_ADMIN_TOKEN is required")
+    uvicorn.run(create_app(LiveStore(args.db), admin_token), host=args.host, port=args.port)
+    return 0
 
 
 if __name__ == "__main__":

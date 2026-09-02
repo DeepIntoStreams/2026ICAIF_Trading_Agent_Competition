@@ -6,23 +6,65 @@ decision envelopes.
 
 ## Authentication
 
-The organizer issues a team API key:
+API keys are issued by the organizer, not self-created by participants and not obtained from a
+public endpoint. The operational flow is:
+
+1. Organizer freezes a unique `team_id` for every approved team.
+2. Organizer runs the registration command once:
 
 ```bash
-python -m deployment.live_server.manage --db /data/competition.sqlite3 register-team team_001
+PYTHONPATH=src python -m deployment.live_server.manage \
+  --db /data/competition.sqlite3 register-team team_001
 ```
 
-The command prints the plaintext once. Participant requests send it as a bearer token. The
-server derives the team from this key; no team ID is needed in the URL.
+3. The command prints a high-entropy plaintext key exactly once. Only its SHA-256 hash is stored.
+4. Organizer sends that key to the team through an authenticated private channel.
+5. The team stores it in `COMPETITION_API_KEY`; it must not be committed to Git or placed in a URL.
+6. Participant requests send it as a Bearer token. The server derives the team from the key, so
+   no team ID is needed in the URL.
+
+Example participant configuration:
+
+```bash
+export COMPETITION_BASE_URL='https://competition.example.org'
+export COMPETITION_API_KEY='<key received privately from the organizer>'
+python -m deployment.starter_kit.client
+```
+
+There is intentionally no `GET /api-key` endpoint: an unauthenticated API cannot safely decide
+which team's secret to return. Rotation/revocation is a required next increment before production.
+
+## Interactive API documentation
+
+Once the FastAPI server is running:
+
+```text
+GET /docs          Swagger UI for reading and trying endpoints
+GET /openapi.json  machine-readable API contract
+GET /health        process health check
+```
 
 ## Get the currently published observation
+
+Participants normally poll status first:
+
+```http
+GET /api/v1/me/status
+Authorization: Bearer <team-api-key>
+```
+
+It reports the server time, current session/deadline, whether an observation is available,
+whether this team already has an accepted decision, the latest receipt, and a small portfolio
+summary. The team then requests the data itself:
 
 ```http
 GET /api/v1/me/observation
 Authorization: Bearer <team-api-key>
 ```
 
-The shared official observation is augmented with only that team's portfolio state.
+The server returns the currently available official observation augmented with only that team's
+portfolio state. "Publish" in organizer commands means load data into the server; it is not a
+push to participants.
 
 ## Submit one decision
 
@@ -72,7 +114,7 @@ not part of v0.1.
 
 ## Organizer-only prototype endpoints
 
-These currently use `LIVE_ADMIN_TOKEN`; they must move to scoped organizer credentials before
+These currently use `COMPETITION_ADMIN_TOKEN`; they must move to scoped organizer credentials before
 production.
 
 ```text
@@ -83,4 +125,3 @@ POST /api/v1/admin/settle     execute queued targets and update state
 The next interface increment will introduce `/api/v1/runs` and a historical episode store so
 Validation can rapidly repeat the same GET-observation/POST-decision loop. Official Competition
 will use the same resources but wait for organizer-published real trading sessions.
-

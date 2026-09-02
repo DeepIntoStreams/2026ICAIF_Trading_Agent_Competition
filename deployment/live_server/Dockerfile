@@ -7,6 +7,7 @@ COPY src ./src
 COPY deployment/__init__.py ./deployment/__init__.py
 COPY deployment/live_server ./deployment/live_server
 RUN pip install --no-cache-dir numpy==2.1.3 pandas==2.2.3 pyyaml==6.0.2 \
+        fastapi==0.116.1 uvicorn==0.35.0 \
     && mkdir /data && chown live:live /data
 USER live
 EXPOSE 8080

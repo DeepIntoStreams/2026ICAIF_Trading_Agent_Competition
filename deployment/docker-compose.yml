@@ -4,8 +4,8 @@ services:
       context: ..
       dockerfile: deployment/live_server/Dockerfile
     environment:
-      LIVE_ADMIN_TOKEN: ${LIVE_ADMIN_TOKEN:?set LIVE_ADMIN_TOKEN}
-      LIVE_DB: /data/competition.sqlite3
+      COMPETITION_ADMIN_TOKEN: ${COMPETITION_ADMIN_TOKEN:?set COMPETITION_ADMIN_TOKEN}
+      COMPETITION_DB: /data/competition.sqlite3
     ports:
       - "127.0.0.1:8080:8080"
     volumes:

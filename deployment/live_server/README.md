@@ -20,7 +20,7 @@ python -m deployment.live_server.manage --db /tmp/icaif.sqlite leaderboard
 Run the API with a secret organizer token:
 
 ```bash
-LIVE_ADMIN_TOKEN='replace-with-secret' python -m deployment.live_server.app \
+COMPETITION_ADMIN_TOKEN='replace-with-secret' python -m deployment.live_server.app \
   --db /tmp/icaif.sqlite --host 127.0.0.1 --port 8080
 ```
 

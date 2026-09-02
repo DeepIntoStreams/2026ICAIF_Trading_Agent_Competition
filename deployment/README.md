@@ -17,6 +17,7 @@ deployment/
   API.md                runnable v0.1 HTTP interface and examples
   Validation_and_Official_Competition_Interaction_Logic.pdf
   docker-compose.yml
+  starter_kit/         participant HTTP client and replaceable mock agent
   live_server/          legacy package name; currently the unified competition service
     app.py              participant and organizer HTTP endpoints
     store.py            SQLite identity, sessions, decisions, settlement and leaderboard
@@ -48,14 +49,14 @@ next-open settlement, state, and local leaderboard computation.
 With Docker:
 
 ```bash
-LIVE_ADMIN_TOKEN='replace-with-a-long-random-secret' docker compose \
+COMPETITION_ADMIN_TOKEN='replace-with-a-long-random-secret' docker compose \
   -f deployment/docker-compose.yml up --build
 ```
 
 For direct Python development, install project dependencies and run:
 
 ```bash
-LIVE_ADMIN_TOKEN='replace-with-a-long-random-secret' PYTHONPATH=src \
+COMPETITION_ADMIN_TOKEN='replace-with-a-long-random-secret' PYTHONPATH=src \
   python -m deployment.live_server.app --db /tmp/competition.sqlite3
 ```
 
@@ -67,3 +68,6 @@ PYTHONPATH=src python -m deployment.live_server.manage \
 ```
 
 See `API.md` for participant requests and `ARCHITECTURE.md` for production gates.
+
+When running locally, interactive FastAPI documentation is available at
+`http://127.0.0.1:8080/docs`; the OpenAPI contract is at `/openapi.json`.
