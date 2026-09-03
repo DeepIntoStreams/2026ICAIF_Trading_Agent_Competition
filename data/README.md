@@ -9,7 +9,8 @@ actual datasets are not.
 - `database/README.md` — authoritative database design and live processing flow.
 - `database/LIVE_WORKFLOW_EXAMPLE.zh-CN.md` — complete Chinese implementation example.
 - `database/LIVE_WORKFLOW_EXAMPLE.en.md` — matching English implementation example.
-- `database/schema.sql` — executable PostgreSQL schema used by every developer.
+- `database/schema.sql` — executable PostgreSQL schema used by every developer,
+  including the raw participant intake and audit-attempt contract.
 - `database/init_db.py` — applies and validates the schema on PostgreSQL 16.
 - `datasets/` — local market/fundamental inputs; ignored by Git.
 - `imports/` — temporary provider downloads; ignored by Git.

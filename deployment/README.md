@@ -5,12 +5,14 @@ and production. SQLite is no longer part of the target architecture.
 
 ## Current implementation boundary
 
-The PostgreSQL schema and reproducible local database bootstrap are ready. The
-existing `deployment/live_server/store.py` is the previous SQLite API prototype
-and is deliberately not started by the new Compose file. It must be replaced by
-repositories and services implementing the PostgreSQL contract before the HTTP
-server is considered runnable again. This prevents accidental operation against
-the obsolete four-table state model.
+The participant receiver runs exclusively on PostgreSQL. It authenticates
+teams, serves published observations, applies the explicit calendar cutoff,
+enforces one accepted decision per team/day, and persists raw decisions plus a
+complete attempt/audit trail.
+
+The receiver does not sanitize weights or write executions. Those operations
+belong to Competition, which consumes `decision_submissions` in `RECEIVED`
+state.
 
 The target flow is documented in:
 
@@ -49,11 +51,14 @@ psql "$COMPETITION_DATABASE_URL" -c '\dt'
 psql "$COMPETITION_DATABASE_URL" -c '\dv'
 ```
 
-Expected result: 15 application tables and 3 convenience views.
+Expected result: 16 application tables and 3 convenience views.
 
-## Next implementation step
+## Run the receiver
 
-Replace the legacy `LiveStore` with PostgreSQL repositories, then implement the
-two-transaction submission/weight handoff and end-of-day execution workflow.
-The HTTP API must not be re-enabled in Compose until it reads and writes the new
-schema exclusively.
+```bash
+export COMPETITION_ADMIN_TOKEN='<high-entropy organizer token>'
+docker compose -f deployment/docker-compose.yml up --build live-server
+```
+
+See `live_server/README.md` for team/calendar initialization and the
+Competition database handoff.

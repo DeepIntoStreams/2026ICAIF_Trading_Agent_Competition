@@ -2,6 +2,10 @@
 
 This document uses one concrete example to specify how the future code should be organized, how it should interact with the database, and how a submitted target vector becomes transactions, cash, positions, and performance. It is an implementation contract; the described business services have not yet been implemented.
 
+Ownership boundary: the Deployment receiver only accepts and preserves the
+participant submission, handing it to Competition in `RECEIVED` state.
+Sanitation, fallback, execution, valuation, and scoring belong to Competition.
+
 Companion files:
 
 - `schema.sql`: the executable source of truth for fields and constraints;
@@ -271,7 +275,7 @@ The API derives the authoritative team from the API key and loads the published 
 }
 ```
 
-The service uses two explicit transactions for receipt and processing:
+Deployment performs only the receipt transaction:
 
 ```python
 def receive_decision(authenticated_team_id, body, idempotency_key, server_now):
@@ -280,8 +284,8 @@ def receive_decision(authenticated_team_id, body, idempotency_key, server_now):
     # 3. Reject and audit a different second submission for team+signal day.
     # 4. INSERT the raw submission as RECEIVED and RETURNING id.
     # 5. Commit the receipt; the generated id is the submission_id.
-    # 6. Call process_submission_weights(submission_id).
-    # 7. Return the final stored receipt.
+    # 6. Return the RECEIVED receipt.
+    # 7. Competition later consumes the database-generated submission_id.
 ```
 
 Every `decision_submissions` field:
@@ -336,7 +340,9 @@ If the database returns `id=200`, every normalized weight row uses `submission_i
 
 ## 8. Normalize and store weights
 
-Weights are persisted after raw receipt and before execution creation. A submission processor, not the execution engine, owns this step:
+Weights are persisted after raw receipt and before execution creation.
+Competition's submission processor—not the Deployment receiver or execution
+engine—owns this step:
 
 ```python
 def process_submission_weights(submission_id: int):

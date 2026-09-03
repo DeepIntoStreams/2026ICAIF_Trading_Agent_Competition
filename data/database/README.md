@@ -22,6 +22,11 @@ The database is the authoritative record of:
 The core identity of a live workflow is `team_id + trading_day_id`. There is one
 official portfolio trajectory per team.
 
+Implementation ownership is split at `decision_submissions.status = 'RECEIVED'`:
+Deployment authenticates, enforces the calendar window and daily limit, records
+every attempt, and persists the untouched participant document. Competition owns
+weight sanitation, fallback decisions, executions, valuation, and scoring.
+
 Important invariants:
 
 1. A team can submit at most once for a signal day. Repeating the same
@@ -29,8 +34,8 @@ Important invariants:
    rejected by the unique database constraint.
 2. A decision based on day T data is scheduled for execution at day T+1 open.
 3. Missing tickers in a submitted target mean target weight zero.
-4. `submission_weights` stores a normalized row for every active instrument,
-   including omitted instruments, so execution loads one complete target vector.
+4. Receiver acceptance leaves a submission at `RECEIVED` without normalized
+   weights. Competition later stores one row per active instrument.
 5. Submitted weights never directly change cash or positions. Only a completed
    execution creates transactions and changes the portfolio.
 6. An execution uses day T+1 open prices. Day T+1 performance uses day T+1 close
@@ -83,6 +88,7 @@ generated or has actually been made available to a team.
 
 ```text
 teams
+  +-- submission_attempts
   +-- observations
   +-- decision_submissions
   |     +-- submission_weights
@@ -161,6 +167,16 @@ the raw document remains unchanged.
 implementation and constraint values used for this submission. Validation rules
 may evolve without making an older stored result ambiguous.
 
+These validation fields are null while status is `RECEIVED`. The Deployment
+receiver never fills them; Competition freezes them when processing begins.
+
+### `submission_attempts`
+
+One append-only row is written for every authenticated decision request. It
+records accepted requests, invalid envelopes, late requests, daily-limit
+rejections, idempotent replays, and idempotency conflicts. Only an `ACCEPTED`
+attempt creates a canonical `decision_submissions` row.
+
 ### `submission_weights`
 
 The execution-facing normalized target vector. There is one row per instrument
@@ -189,25 +205,24 @@ transaction is the resulting trade.
 The `v_submission_weight_details` view already joins team, signal date, execution
 date, ticker, raw weight, and sanitized weight for analysis.
 
-### Exact submission-to-weight handoff
+### Exact receiver-to-Competition handoff
 
-The raw submission and its normalized weights are persisted in two explicit
-transactions so a validator crash cannot erase evidence that the request arrived.
+The receiver stores the accepted attempt, raw canonical submission, and audit
+event in one transaction. It does not invoke the validator.
 
-**Receipt transaction:**
+**Receiver transaction:**
 
 ```sql
 INSERT INTO decision_submissions (..., status, expected_weight_count,
                                   stored_weight_count, ...)
-VALUES (..., 'RECEIVED', :active_instrument_count, 0, ...)
+VALUES (..., 'RECEIVED', :observation_asset_count, 0, ...)
 RETURNING id;
 ```
 
-The returned database-generated `id` is the `submission_id` used by every weight
-row. Application code must not invent or predict this ID. The receipt transaction
-commits before weight processing begins.
+The returned database-generated `id` is returned to the participant and is the
+only ID Competition may use for normalized weights.
 
-**Weight-processing transaction:**
+**Competition-owned weight-processing transaction:**
 
 1. load and lock the `RECEIVED` submission by ID;
 2. parse `raw_payload_json.target_weights`;

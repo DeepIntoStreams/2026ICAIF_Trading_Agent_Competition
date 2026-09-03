@@ -33,8 +33,11 @@ export COMPETITION_DATABASE_URL='postgresql://user:password@host:5432/database'
 python data/database/init_db.py
 ```
 
-初始化是幂等的，可以重复运行。应看到 15 张业务表和 3 个查询视图。
+初始化是幂等的，可以重复运行。应看到 16 张业务表和 3 个查询视图。
 
 ## 当前边界
 
-数据库已经切换，原来的 `LiveStore` 仍是 SQLite 原型参考代码，尚未迁移到新表，因此 Compose 暂时只启动 PostgreSQL 和 schema initializer，不启动 HTTP API。下一步应实现 PostgreSQL repository/service 层，完成后再恢复 API service。
+Participant receiver 已切换到 PostgreSQL，可设置
+`COMPETITION_ADMIN_TOKEN` 后通过 Compose 启动 `live-server`。Receiver
+只负责认证、observation 读取、calendar/cutoff、一天一次和 raw submission
+追踪；权重清洗与 execution 由 Competition 消费 `RECEIVED` 记录后完成。

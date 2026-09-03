@@ -2,6 +2,11 @@
 
 本文用一个具体案例说明未来代码应该如何组织、如何读写数据库，以及一份权重如何最终变成交易、现金、持仓和收益记录。本文是实现合同，不代表相关业务代码已经完成。
 
+实现职责边界：Deployment server 只接收并原样保存 participant submission，
+以 `RECEIVED` 状态交给 Competition；权重清洗、fallback、execution、估值和
+评分均属于 Competition。本案例后续章节描述的是 Competition 如何消费该记录，
+不是 server 接收请求时执行的工作。
+
 配套文件：
 
 - `schema.sql`：数据库字段和约束的唯一可执行定义；
@@ -299,8 +304,8 @@ def receive_decision(authenticated_team_id, body, idempotency_key, server_now):
     # 3. 如果该 team+signal_day 已有其他 submission，拒绝并写 audit。
     # 4. INSERT 完整 raw submission，status=RECEIVED，并 RETURNING id。
     # 5. commit receipt；这个数据库生成的 id 就是 submission_id。
-    # 6. 调用 process_submission_weights(submission_id)。
-    # 7. 返回数据库中的最终 receipt。
+    # 6. commit 后返回 RECEIVED receipt。
+    # 7. Competition 后续按 submission_id 消费。
 ```
 
 `decision_submissions` 每个字段：
@@ -355,7 +360,9 @@ RETURNING id;
 
 ## 8. 权重归一化和存储
 
-权重在原始 submission 成功入库之后、创建 execution 之前保存。它由 submission processor 处理，不由 execution engine 处理：
+权重在原始 submission 成功入库之后、创建 execution 之前保存。它由
+Competition 的 submission processor 处理，不由 Deployment receiver 或
+execution engine 处理：
 
 ```python
 def process_submission_weights(submission_id: int):

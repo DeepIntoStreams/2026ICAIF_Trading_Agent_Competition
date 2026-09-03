@@ -1,5 +1,11 @@
 # Unified competition-server architecture (draft v0.1)
 
+> Implementation note: the current PostgreSQL Deployment component is limited
+> to participant authentication, published-observation reads, calendar/cutoff
+> enforcement, and raw submission intake. The run model, sanitation, execution,
+> settlement, and leaderboard described below belong to future Competition
+> integration and are not performed by the receiver.
+
 This document records the deployment contract derived from
 `Validation_and_Official_Competition_Interaction_Logic.pdf`. It is the working design for the
 server and Starter Kit; unresolved policy choices are called out instead of being embedded in

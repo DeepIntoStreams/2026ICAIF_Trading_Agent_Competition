@@ -1,244 +1,386 @@
-"""SQLite persistence and deterministic next-open settlement."""
+"""PostgreSQL persistence for the participant-facing competition receiver."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import secrets
-import sqlite3
-from datetime import datetime, timezone
-from pathlib import Path
+import uuid
+from datetime import date, datetime, timezone
 from typing import Any
 
-from portfolio_agent.metrics import compute_metrics
-from portfolio_agent.risk import sanitize_target_weights
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
-INITIAL_CASH = 1_000_000.0
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-class LiveStore:
-    def __init__(self, path: str | Path):
-        self.path = str(path)
-        self.db = sqlite3.connect(self.path, check_same_thread=False)
-        self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.executescript("""
-        CREATE TABLE IF NOT EXISTS teams (
-          team_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS sessions (
-          session_date TEXT PRIMARY KEY, deadline_utc TEXT NOT NULL,
-          observation_json TEXT NOT NULL, market_json TEXT NOT NULL,
-          published_at TEXT NOT NULL, settled INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS submissions (
-          source_id TEXT PRIMARY KEY, team_id TEXT NOT NULL, session_date TEXT NOT NULL,
-          received_at TEXT NOT NULL, raw_json TEXT NOT NULL, sanitized_json TEXT NOT NULL,
-          violations_json TEXT NOT NULL, accepted INTEGER NOT NULL, reason TEXT,
-          FOREIGN KEY(team_id) REFERENCES teams(team_id));
-        CREATE INDEX IF NOT EXISTS submission_day ON submissions(team_id, session_date, received_at);
-        CREATE TABLE IF NOT EXISTS states (
-          team_id TEXT PRIMARY KEY, state_json TEXT NOT NULL,
-          FOREIGN KEY(team_id) REFERENCES teams(team_id));
-        """)
-        self.db.commit()
+def canonical_json(document: dict[str, Any]) -> str:
+    return json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                      allow_nan=False)
+
+
+class CompetitionStore:
+    """Synchronous repository/service boundary used by FastAPI and the admin CLI."""
+
+    def __init__(self, database_url: str):
+        if not database_url.startswith(("postgresql://", "postgres://")):
+            raise ValueError("a PostgreSQL COMPETITION_DATABASE_URL is required")
+        self.database_url = database_url
+
+    def _connect(self):
+        return psycopg.connect(self.database_url, row_factory=dict_row)
 
     @staticmethod
-    def _hash(token: str) -> str:
-        return hashlib.sha256(token.encode()).hexdigest()
+    def _hash_api_key(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-    def register_team(self, team_id: str, token: str | None = None) -> str:
+    @staticmethod
+    def _payload_hash(document: dict[str, Any]) -> str:
+        return hashlib.sha256(canonical_json(document).encode("utf-8")).hexdigest()
+
+    def health(self) -> bool:
+        try:
+            with self._connect() as connection:
+                return connection.execute("SELECT 1 AS ok").fetchone()["ok"] == 1
+        except psycopg.Error:
+            return False
+
+    def close(self) -> None:
+        """Compatibility hook for a future pooled implementation."""
+
+    def register_team(self, team_code: str, display_name: str | None = None,
+                      token: str | None = None) -> str:
         token = token or secrets.token_urlsafe(32)
-        now = datetime.now(timezone.utc).isoformat()
-        state = {"cash": INITIAL_CASH, "shares": {}, "queued": {}, "previous_target": {},
-                 "nav": [INITIAL_CASH], "total_cost": 0.0, "total_traded": 0.0,
-                 "violation_days": 0, "decision_days": 0, "last_settled": None}
-        with self.db:
-            self.db.execute("INSERT INTO teams VALUES (?, ?, ?)", (team_id, self._hash(token), now))
-            self.db.execute("INSERT INTO states VALUES (?, ?)", (team_id, json.dumps(state)))
+        timestamp = now_utc()
+        with self._connect() as connection:
+            row = connection.execute(
+                """INSERT INTO teams
+                       (team_code, display_name, api_key_hash, status, created_at, updated_at)
+                   VALUES (%s, %s, %s, 'ACTIVE', %s, %s)
+                   RETURNING id""",
+                (team_code, display_name or team_code, self._hash_api_key(token),
+                 timestamp, timestamp),
+            ).fetchone()
+            self._audit(connection, row["id"], None, "ADMIN", "organizer",
+                        "TEAM_CREATED", "team", row["id"], None,
+                        {"team_code": team_code})
         return token
 
-    def authenticate(self, team_id: str, token: str) -> bool:
-        row = self.db.execute("SELECT token_hash FROM teams WHERE team_id=?", (team_id,)).fetchone()
-        return bool(row and secrets.compare_digest(row["token_hash"], self._hash(token)))
-
     def team_for_api_key(self, token: str) -> str | None:
-        """Resolve identity from a bearer key; client-provided team IDs are not trusted."""
         if not token:
             return None
-        digest = self._hash(token)
-        row = self.db.execute("SELECT team_id, token_hash FROM teams WHERE token_hash=?",
-                              (digest,)).fetchone()
-        if not row or not secrets.compare_digest(row["token_hash"], digest):
+        digest = self._hash_api_key(token)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT team_code, api_key_hash FROM teams "
+                "WHERE api_key_hash=%s AND status='ACTIVE'", (digest,),
+            ).fetchone()
+        if not row or not secrets.compare_digest(row["api_key_hash"], digest):
             return None
-        return str(row["team_id"])
+        return str(row["team_code"])
 
-    def publish(self, observation: dict[str, Any], market: dict[str, Any]) -> None:
-        date = observation["session_date"]
-        deadline = observation["event_time_utc"]
-        now = datetime.now(timezone.utc).isoformat()
-        with self.db:
-            self.db.execute(
-                "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, 0)",
-                (date, deadline, json.dumps(observation), json.dumps(market), now),
-            )
-
-    def session(self, date: str | None = None) -> dict[str, Any] | None:
-        sql = "SELECT * FROM sessions WHERE session_date=?" if date else \
-              "SELECT * FROM sessions ORDER BY session_date DESC LIMIT 1"
-        row = self.db.execute(sql, (date,) if date else ()).fetchone()
-        if not row:
-            return None
-        return {"session_date": row["session_date"], "deadline_utc": row["deadline_utc"],
-                "observation": json.loads(row["observation_json"]),
-                "market": json.loads(row["market_json"]), "settled": bool(row["settled"])}
-
-    def state(self, team_id: str) -> dict[str, Any]:
-        row = self.db.execute("SELECT state_json FROM states WHERE team_id=?", (team_id,)).fetchone()
-        if not row:
-            raise KeyError(team_id)
-        return json.loads(row["state_json"])
-
-    def team_observation(self, team_id: str, date: str | None = None) -> dict[str, Any] | None:
-        session = self.session(date)
-        if not session:
-            return None
-        obs, state = session["observation"], self.state(team_id)
-        market = session["market"]
-        px = {t: v.get("adj_open") for t, v in market.items() if v.get("adj_open")}
-        nav = state["cash"] + sum(sh * px[t] for t, sh in state["shares"].items() if t in px)
-        obs["portfolio"] = {
-            "weights": {t: sh * px[t] / nav for t, sh in state["shares"].items() if t in px and nav},
-            "cash_ratio": state["cash"] / nav if nav else 1.0, "nav": nav,
-        }
-        return obs
-
-    def team_status(self, team_id: str) -> dict[str, Any]:
-        """Return the small polling payload a participant needs before requesting data."""
-        session = self.session()
-        state = self.state(team_id)
-        submission = None
-        if session:
-            row = self.db.execute(
-                "SELECT source_id, received_at, accepted, reason FROM submissions "
-                "WHERE team_id=? AND session_date=? ORDER BY received_at DESC LIMIT 1",
-                (team_id, session["session_date"]),
+    def create_trading_day(self, trading_date: date, market_open_at: datetime,
+                           market_close_at: datetime, submission_open_at: datetime,
+                           submission_deadline_at: datetime) -> tuple[dict[str, Any], bool]:
+        values = (trading_date, market_open_at, market_close_at,
+                  submission_open_at, submission_deadline_at)
+        if not (market_open_at < market_close_at and
+                submission_open_at < submission_deadline_at):
+            raise ValueError("market and submission windows must be strictly ordered")
+        timestamp = now_utc()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM trading_days WHERE trading_date=%s FOR UPDATE", (trading_date,),
             ).fetchone()
             if row:
-                submission = {
-                    "id": row["source_id"], "received_at": row["received_at"],
-                    "accepted": bool(row["accepted"]), "reason": row["reason"],
-                }
+                existing = tuple(row[key] for key in (
+                    "trading_date", "market_open_at", "market_close_at",
+                    "submission_open_at", "submission_deadline_at"))
+                if existing != values:
+                    raise ValueError("trading day already exists with different times")
+                return dict(row), True
+            row = connection.execute(
+                """INSERT INTO trading_days
+                       (trading_date, market_open_at, market_close_at,
+                        submission_open_at, submission_deadline_at, created_at, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *""",
+                (*values, timestamp, timestamp),
+            ).fetchone()
+            self._audit(connection, None, row["id"], "ADMIN", "calendar",
+                        "TRADING_DAY_CREATED", "trading_day", row["id"], None,
+                        {"trading_date": trading_date.isoformat()})
+            return dict(row), False
+
+    def _team(self, connection, team_code: str, *, lock: bool = False):
+        suffix = " FOR UPDATE" if lock else ""
+        return connection.execute(
+            "SELECT id, team_code, status FROM teams WHERE team_code=%s" + suffix,
+            (team_code,),
+        ).fetchone()
+
+    @staticmethod
+    def _audit(connection, team_id: int | None, day_id: int | None,
+               actor_type: str, actor_id: str | None, event_type: str,
+               entity_type: str | None, entity_id: int | None,
+               request_id: str | None, details: dict[str, Any]) -> None:
+        connection.execute(
+            """INSERT INTO audit_logs
+                   (team_id, trading_day_id, actor_type, actor_id, event_type,
+                    entity_type, entity_id, request_id, details_json, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (team_id, day_id, actor_type, actor_id, event_type, entity_type,
+             entity_id, request_id, Jsonb(details), now_utc()),
+        )
+
+    @staticmethod
+    def _current_observation(connection, team_id: int, session_date: date | None = None,
+                             *, lock: bool = False):
+        conditions = ["o.team_id=%s", "o.published_at IS NOT NULL"]
+        params: list[Any] = [team_id]
+        if session_date is not None:
+            conditions.append("td.trading_date=%s")
+            params.append(session_date)
+        lock_clause = " FOR UPDATE OF o" if lock else ""
+        return connection.execute(
+            """SELECT o.*, td.trading_date, td.submission_open_at,
+                      td.submission_deadline_at
+                 FROM observations o
+                 JOIN trading_days td ON td.id=o.trading_day_id
+                WHERE """ + " AND ".join(conditions) +
+            " ORDER BY td.trading_date DESC LIMIT 1" + lock_clause,
+            tuple(params),
+        ).fetchone()
+
+    def team_status(self, team_code: str, at: datetime | None = None) -> dict[str, Any]:
+        at = at or now_utc()
+        with self._connect() as connection:
+            team = self._team(connection, team_code)
+            if not team:
+                raise KeyError(team_code)
+            observation = self._current_observation(connection, team["id"])
+            submission = None
+            if observation:
+                submission = connection.execute(
+                    """SELECT id, idempotency_key, received_at, status
+                         FROM decision_submissions
+                        WHERE team_id=%s AND signal_day_id=%s""",
+                    (team["id"], observation["trading_day_id"]),
+                ).fetchone()
+        if not observation:
+            session = None
+        else:
+            opens = observation["submission_open_at"]
+            deadline = observation["submission_deadline_at"]
+            session = {
+                "session_date": observation["trading_date"].isoformat(),
+                "submission_open_at": opens.isoformat() if opens else None,
+                "submission_deadline_at": deadline.isoformat() if deadline else None,
+                "observation_available": bool(opens and deadline and opens <= at <= deadline),
+                "decision_accepted": submission is not None,
+            }
         return {
-            "team_id": team_id,
-            "server_time_utc": datetime.now(timezone.utc).isoformat(),
-            "session": None if not session else {
-                "session_date": session["session_date"],
-                "deadline_utc": session["deadline_utc"],
-                "settled": session["settled"],
-                "observation_available": True,
-                "decision_accepted": bool(submission and submission["accepted"]),
-            },
-            "latest_submission": submission,
-            "portfolio": {
-                "nav": state["nav"][-1],
-                "last_settled": state["last_settled"],
+            "team_id": team_code,
+            "server_time_utc": at.isoformat(),
+            "session": session,
+            "latest_submission": None if not submission else {
+                "id": submission["id"],
+                "idempotency_key": submission["idempotency_key"],
+                "received_at": submission["received_at"].isoformat(),
+                "status": submission["status"],
+                "accepted": True,
             },
         }
 
-    def submit(self, source_id: str, authenticated_team: str, document: dict[str, Any],
-               received_at: str | None = None) -> dict[str, Any]:
-        existing = self.db.execute("SELECT * FROM submissions WHERE source_id=?", (source_id,)).fetchone()
-        if existing:
-            return {"accepted": bool(existing["accepted"]), "idempotent": True,
-                    "reason": existing["reason"]}
-        date = document.get("session_date", "")
-        session = self.session(date)
-        received = received_at or datetime.now(timezone.utc).isoformat()
-        reason = None
-        prior = self.db.execute(
-            "SELECT source_id FROM submissions WHERE team_id=? AND session_date=? AND accepted=1",
-            (authenticated_team, date),
+    def team_observation(self, team_code: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            team = self._team(connection, team_code)
+            if not team:
+                raise KeyError(team_code)
+            observation = self._current_observation(connection, team["id"], lock=True)
+            if not observation:
+                return None
+            if observation["first_served_at"] is None:
+                served_at = now_utc()
+                connection.execute(
+                    "UPDATE observations SET first_served_at=%s WHERE id=%s",
+                    (served_at, observation["id"]),
+                )
+                self._audit(connection, team["id"], observation["trading_day_id"],
+                            "TEAM", team_code, "OBSERVATION_FIRST_SERVED", "observation",
+                            observation["id"], None, {})
+            return dict(observation["payload_json"])
+
+    def record_invalid_attempt(self, team_code: str, request_id: str,
+                               idempotency_key: str | None, received_at: datetime,
+                               document: dict[str, Any] | None, payload_hash: str | None,
+                               reason: str) -> None:
+        session_date = None
+        if document and isinstance(document.get("session_date"), str):
+            try:
+                session_date = date.fromisoformat(document["session_date"])
+            except ValueError:
+                pass
+        with self._connect() as connection:
+            team = self._team(connection, team_code)
+            if not team:
+                return
+            day = None
+            if session_date:
+                day = connection.execute(
+                    "SELECT id FROM trading_days WHERE trading_date=%s", (session_date,),
+                ).fetchone()
+            attempt_id = self._insert_attempt(
+                connection, team["id"], day["id"] if day else None, request_id,
+                idempotency_key, received_at, document, payload_hash,
+                "INVALID_REQUEST", reason,
+                {"hash_kind": "raw_body_sha256"} if payload_hash else {},
+            )
+            self._audit(connection, team["id"], day["id"] if day else None,
+                        "TEAM", team_code, "SUBMISSION_REJECTED", "submission_attempt",
+                        attempt_id, request_id, {"reason": reason})
+
+    @staticmethod
+    def _insert_attempt(connection, team_id: int, day_id: int | None, request_id: str,
+                        idempotency_key: str | None, received_at: datetime,
+                        document: dict[str, Any] | None, payload_hash: str | None,
+                        outcome: str, reason: str | None,
+                        details: dict[str, Any] | None = None) -> int:
+        row = connection.execute(
+            """INSERT INTO submission_attempts
+                   (team_id, trading_day_id, request_id, idempotency_key, received_at,
+                    payload_json, payload_hash, outcome, rejection_reason,
+                    details_json, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               RETURNING id""",
+            (team_id, day_id, request_id, idempotency_key, received_at,
+             Jsonb(document) if document is not None else None, payload_hash,
+             outcome, reason, Jsonb(details or {}), now_utc()),
         ).fetchone()
-        if document.get("type") != "decision_response": reason = "invalid_type"
-        elif document.get("team_id") not in (None, authenticated_team): reason = "team_mismatch"
-        elif not session: reason = "unknown_session"
-        elif datetime.fromisoformat(received.replace("Z", "+00:00")) > datetime.fromisoformat(
-                session["deadline_utc"].replace("Z", "+00:00")): reason = "late_submission"
-        elif prior: reason = "decision_already_accepted"
-        elif not isinstance(document.get("target_weights"), dict): reason = "invalid_weights"
-        tickers = [a["ticker"] for a in session["observation"]["assets"]] if session else []
-        constraints = session["observation"].get("constraints", {}) if session else {}
-        clean, violations = sanitize_target_weights(
-            document.get("target_weights", {}) if not reason else {}, tickers,
-            float(constraints.get("max_asset_weight", .10)),
-            float(constraints.get("max_gross_exposure", 1.0)))
-        accepted = not reason
-        with self.db:
-            self.db.execute("INSERT INTO submissions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            (source_id, authenticated_team, date, received, json.dumps(document),
-                             json.dumps(clean), json.dumps(violations), int(accepted), reason))
-        return {"accepted": accepted, "idempotent": False, "reason": reason,
-                "sanitized_weights": clean, "violations": violations}
+        return int(row["id"])
 
-    def _latest_weights(self, team: str, date: str, previous: dict[str, float]):
-        row = self.db.execute(
-            "SELECT * FROM submissions WHERE team_id=? AND session_date=? AND accepted=1 "
-            "ORDER BY received_at DESC LIMIT 1", (team, date)).fetchone()
-        if not row:
-            return previous, ["no_submission"]
-        return json.loads(row["sanitized_json"]), json.loads(row["violations_json"])
+    def submit(self, team_code: str, document: dict[str, Any], idempotency_key: str,
+               received_at: datetime | None = None, request_id: str | None = None) -> dict[str, Any]:
+        received_at = received_at or now_utc()
+        request_id = request_id or str(uuid.uuid4())
+        payload_hash = self._payload_hash(document)
+        session_date = date.fromisoformat(document["session_date"])
 
-    def settle(self, date: str) -> list[dict[str, Any]]:
-        session = self.session(date)
-        if not session or session["settled"]:
-            raise ValueError("session missing or already settled")
-        px = {t: v for t, v in session["market"].items() if v.get("adj_open") and v.get("adj_close")}
-        fee_rate = float(session["observation"].get("constraints", {}).get("fee_rate", .001))
-        results = []
-        teams = [r["team_id"] for r in self.db.execute("SELECT team_id FROM teams")]
-        for team in teams:
-            st = self.state(team)
-            queued = st.get("queued", {})
-            if queued:
-                nav_open = st["cash"] + sum(sh * px[t]["adj_open"] for t, sh in st["shares"].items() if t in px)
-                new = {t: 0.0 for t in st["shares"]}
-                for t, weight in queued.items():
-                    if t in px: new[t] = weight * nav_open / px[t]["adj_open"]
-                traded = sum(abs(new.get(t, 0) - st["shares"].get(t, 0)) * px[t]["adj_open"]
-                             for t in set(new) | set(st["shares"]) if t in px)
-                fee = traded * fee_rate
-                invested = sum(sh * px[t]["adj_open"] for t, sh in new.items() if t in px)
-                st.update(cash=nav_open - invested - fee, shares=new,
-                          total_cost=st["total_cost"] + fee,
-                          total_traded=st["total_traded"] + traded)
-            target, violations = self._latest_weights(team, date, st["previous_target"])
-            st["queued"], st["previous_target"] = target, target
-            st["decision_days"] += 1
-            if violations: st["violation_days"] += 1
-            nav_close = st["cash"] + sum(sh * px[t]["adj_close"] for t, sh in st["shares"].items() if t in px)
-            st["nav"].append(nav_close); st["last_settled"] = date
-            with self.db:
-                self.db.execute("UPDATE states SET state_json=? WHERE team_id=?", (json.dumps(st), team))
-            results.append({"team_id": team, "nav": nav_close, "violations": violations})
-        with self.db:
-            self.db.execute("UPDATE sessions SET settled=1 WHERE session_date=?", (date,))
-        return results
+        with self._connect() as connection:
+            team = self._team(connection, team_code)
+            if not team or team["status"] != "ACTIVE":
+                raise KeyError(team_code)
+            observation = self._current_observation(
+                connection, team["id"], session_date, lock=True)
+            day_id = observation["trading_day_id"] if observation else None
 
-    def leaderboard(self) -> list[dict[str, Any]]:
-        board = []
-        for row in self.db.execute("SELECT team_id, state_json FROM states"):
-            st = json.loads(row["state_json"])
-            metrics = None
-            if len(st["nav"]) >= 2:
-                metrics = compute_metrics(st["nav"], initial_capital=INITIAL_CASH,
-                                          total_transaction_cost=st["total_cost"],
-                                          total_trade_value=st["total_traded"],
-                                          violation_steps=st["violation_days"],
-                                          decision_steps=st["decision_days"])
-            board.append({"team_id": row["team_id"], "metrics": metrics,
-                          "nav": st["nav"][-1],
-                          "status": "ranked" if metrics is not None else "pending"})
-        board.sort(key=lambda x: (
-            x["metrics"] is not None,
-            x["metrics"]["m1_cumulative_return"] if x["metrics"] else float("-inf"),
-        ), reverse=True)
-        return board
+            existing_key = connection.execute(
+                """SELECT id, received_at, payload_hash, status
+                     FROM decision_submissions
+                    WHERE team_id=%s AND idempotency_key=%s""",
+                (team["id"], idempotency_key),
+            ).fetchone()
+            if existing_key:
+                same = secrets.compare_digest(existing_key["payload_hash"], payload_hash)
+                outcome = "IDEMPOTENT_REPLAY" if same else "IDEMPOTENCY_CONFLICT"
+                reason = "same_request_replayed" if same else "idempotency_key_reused"
+                attempt_id = self._insert_attempt(
+                    connection, team["id"], day_id, request_id, idempotency_key,
+                    received_at, document, payload_hash, outcome, reason,
+                    {"submission_id": existing_key["id"],
+                     "hash_kind": "canonical_json_sha256"},
+                )
+                self._audit(connection, team["id"], day_id, "TEAM", team_code,
+                            outcome, "submission_attempt", attempt_id, request_id,
+                            {"submission_id": existing_key["id"]})
+                if not same:
+                    return {"accepted": False, "idempotent": False,
+                            "reason": "idempotency_key_reused"}
+                return self._receipt(existing_key, idempotent=True)
+
+            outcome = reason = None
+            if document.get("team_id") not in (None, team_code):
+                outcome, reason = "TEAM_MISMATCH", "team_mismatch"
+            elif not observation:
+                outcome, reason = "UNKNOWN_SESSION", "unknown_or_unpublished_session"
+            elif not observation["submission_open_at"] or not observation["submission_deadline_at"]:
+                outcome, reason = "OUTSIDE_WINDOW", "submission_window_not_configured"
+            elif not (observation["submission_open_at"] <= received_at <=
+                      observation["submission_deadline_at"]):
+                outcome, reason = "OUTSIDE_WINDOW", "outside_submission_window"
+
+            next_day = None
+            if observation and not outcome:
+                next_day = connection.execute(
+                    """SELECT id, trading_date, market_open_at FROM trading_days
+                        WHERE trading_date>%s ORDER BY trading_date LIMIT 1""",
+                    (session_date,),
+                ).fetchone()
+                if not next_day:
+                    outcome, reason = "UNKNOWN_SESSION", "next_trading_day_not_configured"
+
+            if observation and not outcome:
+                existing_day = connection.execute(
+                    """SELECT id FROM decision_submissions
+                        WHERE team_id=%s AND signal_day_id=%s""",
+                    (team["id"], day_id),
+                ).fetchone()
+                if existing_day:
+                    outcome, reason = "ALREADY_SUBMITTED", "decision_already_accepted"
+
+            if outcome:
+                attempt_id = self._insert_attempt(
+                    connection, team["id"], day_id, request_id, idempotency_key,
+                    received_at, document, payload_hash, outcome, reason,
+                    {"hash_kind": "canonical_json_sha256"},
+                )
+                self._audit(connection, team["id"], day_id, "TEAM", team_code,
+                            "SUBMISSION_REJECTED", "submission_attempt", attempt_id,
+                            request_id, {"reason": reason})
+                return {"accepted": False, "idempotent": False, "reason": reason}
+
+            attempt_id = self._insert_attempt(
+                connection, team["id"], day_id, request_id, idempotency_key,
+                received_at, document, payload_hash, "ACCEPTED", None,
+                {"hash_kind": "canonical_json_sha256"},
+            )
+            assets = observation["payload_json"].get("assets", [])
+            expected_count = len({asset.get("ticker") for asset in assets
+                                  if isinstance(asset, dict) and asset.get("ticker")})
+            agent_version = (document.get("metadata") or {}).get("agent_version")
+            timestamp = now_utc()
+            submission = connection.execute(
+                """INSERT INTO decision_submissions
+                       (intake_attempt_id, team_id, observation_id, signal_day_id,
+                        execution_day_id, idempotency_key, received_at, raw_payload_json,
+                        payload_hash, source, status, validation_summary_json,
+                        expected_weight_count, stored_weight_count, agent_version,
+                        created_at, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'PARTICIPANT',
+                           'RECEIVED', '{}'::jsonb, %s, 0, %s, %s, %s)
+                   RETURNING id, received_at, payload_hash, status""",
+                (attempt_id, team["id"], observation["id"], day_id, next_day["id"],
+                 idempotency_key, received_at, Jsonb(document), payload_hash,
+                 expected_count, agent_version, timestamp, timestamp),
+            ).fetchone()
+            self._audit(connection, team["id"], day_id, "TEAM", team_code,
+                        "SUBMISSION_RECEIVED", "decision_submission", submission["id"],
+                        request_id, {"execution_day": next_day["trading_date"].isoformat()})
+            return self._receipt(submission, idempotent=False)
+
+    @staticmethod
+    def _receipt(row: dict[str, Any], *, idempotent: bool) -> dict[str, Any]:
+        return {
+            "accepted": True,
+            "id": row["id"],
+            "status": row["status"],
+            "received_at": row["received_at"].isoformat(),
+            "idempotent": idempotent,
+            "reason": None,
+        }
+
+
+LiveStore = CompetitionStore

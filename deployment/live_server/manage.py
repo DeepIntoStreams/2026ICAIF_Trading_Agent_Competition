@@ -1,33 +1,56 @@
-"""Organizer CLI for team registration and local JSON imports."""
+"""Organizer CLI for PostgreSQL team and trading-calendar administration."""
 
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
+import os
+from datetime import date, datetime
 
-from .store import LiveStore
+from .store import CompetitionStore
+
+
+def aware_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise argparse.ArgumentTypeError("timestamp must include a timezone")
+    return parsed
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(); ap.add_argument("--db", default="competition.sqlite3")
-    sub = ap.add_subparsers(dest="command", required=True)
-    reg = sub.add_parser("register-team"); reg.add_argument("team_id")
-    pub = sub.add_parser("publish"); pub.add_argument("observation"); pub.add_argument("market")
-    imp = sub.add_parser("import-submission"); imp.add_argument("source_id"); imp.add_argument("team_id")
-    imp.add_argument("submission"); imp.add_argument("--received-at")
-    settle = sub.add_parser("settle"); settle.add_argument("session_date")
-    sub.add_parser("leaderboard")
-    args = ap.parse_args(); store = LiveStore(args.db)
-    if args.command == "register-team": print(store.register_team(args.team_id))
-    elif args.command == "publish":
-        store.publish(json.loads(Path(args.observation).read_text()), json.loads(Path(args.market).read_text()))
-    elif args.command == "import-submission":
-        print(json.dumps(store.submit(args.source_id, args.team_id,
-              json.loads(Path(args.submission).read_text()), args.received_at), indent=2))
-    elif args.command == "settle": print(json.dumps(store.settle(args.session_date), indent=2))
-    else: print(json.dumps(store.leaderboard(), indent=2))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--database-url", default=os.environ.get("COMPETITION_DATABASE_URL"))
+    commands = parser.add_subparsers(dest="command", required=True)
+    team = commands.add_parser("register-team")
+    team.add_argument("team_code")
+    team.add_argument("--display-name")
+    day = commands.add_parser("create-trading-day")
+    day.add_argument("trading_date", type=date.fromisoformat)
+    day.add_argument("--market-open-at", required=True, type=aware_datetime)
+    day.add_argument("--market-close-at", required=True, type=aware_datetime)
+    day.add_argument("--submission-open-at", required=True, type=aware_datetime)
+    day.add_argument("--submission-deadline-at", required=True, type=aware_datetime)
+    commands.add_parser("health")
+    args = parser.parse_args()
+    if not args.database_url:
+        raise SystemExit("COMPETITION_DATABASE_URL is required")
+    store = CompetitionStore(args.database_url)
+    if args.command == "register-team":
+        key = store.register_team(args.team_code, args.display_name)
+        print(json.dumps({"team_code": args.team_code, "api_key": key}))
+    elif args.command == "create-trading-day":
+        row, idempotent = store.create_trading_day(
+            args.trading_date, args.market_open_at, args.market_close_at,
+            args.submission_open_at, args.submission_deadline_at,
+        )
+        print(json.dumps({"id": row["id"], "trading_date": str(row["trading_date"]),
+                          "idempotent": idempotent}))
+    else:
+        healthy = store.health()
+        print(json.dumps({"database": "ok" if healthy else "unavailable"}))
+        return 0 if healthy else 1
     return 0
 
 
-if __name__ == "__main__": raise SystemExit(main())
+if __name__ == "__main__":
+    raise SystemExit(main())

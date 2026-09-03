@@ -1,8 +1,8 @@
-# Competition API quick start (interface draft v0.1)
+# Competition receiver API (v0.2)
 
-This is the participant interface draft. The previous SQLite prototype implements
-an older version for reference, but the HTTP service is temporarily disabled in
-Compose until its persistence layer is migrated to the PostgreSQL contract.
+This is the PostgreSQL-backed participant intake interface. Weight sanitation,
+execution, portfolio settlement, and leaderboard calculation are owned by the
+Competition component and are not HTTP receiver responsibilities.
 
 ## Authentication
 
@@ -89,35 +89,30 @@ Example receipt:
 ```json
 {
   "accepted": true,
+  "id": 200,
+  "status": "RECEIVED",
+  "received_at": "2026-10-27T19:00:00+00:00",
   "idempotent": false,
-  "reason": null,
-  "sanitized_weights": {"AAPL": 0.1, "MSFT": 0.05},
-  "violations": []
+  "reason": null
 }
 ```
 
-## Read team state and local leaderboard
+The receipt never contains sanitized weights. Semantically invalid weights such
+as unknown tickers, negative values, or cap violations remain unchanged in the
+raw database record for Competition to process. Structurally invalid requests,
+late requests, duplicates, and idempotency conflicts are recorded as attempts
+but do not create another official submission.
 
-```http
-GET /api/v1/me/state
-Authorization: Bearer <team-api-key>
+## Organizer endpoints
 
-GET /api/v1/leaderboard
-```
-
-The leaderboard endpoint is local and derived from the organizer database. Codabench syncing is
-not part of v0.1.
-
-## Organizer-only prototype endpoints
-
-These currently use `COMPETITION_ADMIN_TOKEN`; they must move to scoped organizer credentials before
-production.
+These use `COMPETITION_ADMIN_TOKEN`:
 
 ```text
-POST /api/v1/admin/sessions   publish immutable observation + hidden settlement market data
-POST /api/v1/admin/settle     execute queued targets and update state
+POST /api/v1/admin/teams
+POST /api/v1/admin/trading-days
 ```
 
-The next interface increment will introduce `/api/v1/runs` and a historical episode store so
-Validation can rapidly repeat the same GET-observation/POST-decision loop. Official Competition
-will use the same resources but wait for organizer-published real trading sessions.
+Trading-day timestamps must include a timezone. Repeating an identical calendar
+record is idempotent; changing an existing date returns a conflict. Observations
+are written by the Data/Competition workflow after their referenced portfolio
+snapshots exist.
