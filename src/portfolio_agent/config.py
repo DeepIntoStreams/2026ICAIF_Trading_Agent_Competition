@@ -31,7 +31,7 @@ class EvaluationSettings:
 @dataclass
 class ConstraintSettings:
     long_only: bool = True
-    max_asset_weight: float = 0.10
+    max_asset_weight: float = 0.30   # per-asset cap knob (set 0.10 or 0.30)
     max_gross_exposure: float = 1.00
 
 

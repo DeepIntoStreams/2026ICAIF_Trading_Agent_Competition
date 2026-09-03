@@ -30,9 +30,9 @@ ROOT = COMP.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from portfolio_agent.metrics import compute_metrics
-from portfolio_agent.risk import sanitize_target_weights
+from portfolio_agent.risk import validate_target_weights
 
-FEE, CAP, GROSS, INITIAL = 0.001, 0.10, 1.00, 1_000_000.0
+FEE, CAP, GROSS, INITIAL = 0.001, 0.30, 1.00, 1_000_000.0   # CAP = per-asset knob (0.10 or 0.30)
 DAYS = json.loads((HERE / "data.json").read_text())["days"]
 UNIVERSE = sorted(DAYS[0]["assets"])
 BASELINES = json.loads((HERE / "baselines.json").read_text())
@@ -186,23 +186,28 @@ def submit():
         session["msg"] = {"kind": "err", "title": f"Schema rejected ({len(errs)})", "lines": errs}
         return redirect(url_for("portal"))
 
-    # 2) SEMANTIC: repair out-of-range weights (counts toward M9)
-    clean, viol = sanitize_target_weights(doc.get("target_weights", {}), UNIVERSE, CAP, GROSS)
+    # 2) SEMANTIC validation (reject-not-repair): an invalid decision is NOT executed; the
+    #    previous portfolio is held and the day counts toward M9.
+    weights, viol = validate_target_weights(doc.get("target_weights", {}), UNIVERSE, CAP, GROSS)
+    executed = weights is not None
 
-    # STORE the accepted, schema-conforming decision_response
+    # STORE the schema-conforming decision_response and the server verdict
     sub_dir = STORE / "submissions" / safe(team); sub_dir.mkdir(parents=True, exist_ok=True)
     doc["_server"] = {"received_utc": datetime.now(timezone.utc).isoformat(),
-                      "sanitized_weights": {k: round(v, 4) for k, v in clean.items()},
-                      "violations": viol}
+                      "executed": executed, "violations": viol,
+                      "weights": {k: round(v, 4) for k, v in (weights or {}).items()}}
     (sub_dir / f"{today}.json").write_text(json.dumps(doc, indent=2))
 
     rec = {"date": today, "news": len(DAYS[d]["news"]),
-           "weights": {k: round(v, 4) for k, v in clean.items()}, "violations": viol,
+           "weights": {k: round(v, 4) for k, v in (weights or {}).items()}, "violations": viol,
            "exec": None, "nav": None}
     if d == len(DAYS) - 1:
         rec["exec"] = "no execution (final day)"; rec["nav"] = st["nav"][-1]; st["done"] = True
+    elif executed:
+        rec["exec"] = settle_next_open(st, weights, d + 1); rec["nav"] = st["nav"][-1]; st["day"] += 1
     else:
-        rec["exec"] = settle_next_open(st, clean, d + 1); rec["nav"] = st["nav"][-1]; st["day"] += 1
+        rec["exec"] = "rejected (" + ", ".join(viol) + ") - no trade, previous portfolio held"
+        st["nav"].append(st["nav"][-1]); rec["nav"] = st["nav"][-1]; st["day"] += 1
     st["audit"].append(rec); save_state(st)
     session["msg"] = {"kind": "ok", "title": f"Accepted for {today}",
                       "lines": [f"{len(clean)} positions stored" + (f", {len(viol)} repair(s)" if viol else ", schema-valid")]}

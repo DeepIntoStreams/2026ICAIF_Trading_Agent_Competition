@@ -17,18 +17,27 @@ class Agent(BaseAgent):
     agent_version = "example-momentum-1.0"
 
     def setup(self, universe: list[dict[str, Any]], constraints: dict[str, Any]) -> None:
-        self.max_asset_weight = float(constraints.get("max_asset_weight", 0.10))
+        self.max_asset_weight = float(constraints.get("max_asset_weight", 0.30))
         self.max_positions = 10
 
     def decide(self, observation: dict[str, Any]) -> dict[str, float]:
-        market = observation.get("market_features", {})
-        # rank by 60-day momentum, prefer lower volatility as a tie-breaker on size
+        # The observation gives RAW daily bars (OHLCV) - engineer your own features from them.
+        history = observation.get("market_history", {})
         scored = []
-        for ticker, feats in market.items():
-            mom = feats.get("momentum_60d")
-            if mom is None or not math.isfinite(mom) or mom <= 0:
+        for ticker, bars in history.items():
+            closes = [b["close"] for b in bars if b.get("close")]
+            if len(closes) < 61:
                 continue
-            vol = feats.get("volatility_20d") or 0.02
+            mom = closes[-1] / closes[-61] - 1.0                 # 60-day momentum
+            if not math.isfinite(mom) or mom <= 0:
+                continue
+            rets = [closes[i] / closes[i - 1] - 1.0               # 20-day volatility
+                    for i in range(len(closes) - 20, len(closes)) if closes[i - 1] > 0]
+            if len(rets) > 1:
+                mean_r = sum(rets) / len(rets)
+                vol = (sum((r - mean_r) ** 2 for r in rets) / len(rets)) ** 0.5
+            else:
+                vol = 0.02
             scored.append((ticker, mom, max(vol, 0.005)))
         if not scored:
             return {}

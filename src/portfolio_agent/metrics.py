@@ -45,16 +45,17 @@ def compute_metrics(
             math.sqrt(annualization) * float(np.mean(excess_returns)) / volatility
         )
 
-    downside = excess_returns[excess_returns < 0.0]
+    # Target semideviation: average min(r,0)^2 over ALL T returns (not only the losing
+    # days), matching the standard Sortino downside deviation d = sqrt((1/T) sum min(r,0)^2).
+    negative_part = np.minimum(excess_returns, 0.0)
+    downside_deviation = float(np.sqrt(np.mean(negative_part ** 2))) if n > 0 else 0.0
     sortino: float | None = None
-    if len(downside) > 0:
-        downside_deviation = float(np.sqrt(np.mean(downside ** 2)))
-        if downside_deviation > 0:
-            sortino = _nullable_float(
-                math.sqrt(annualization)
-                * float(np.mean(excess_returns))
-                / downside_deviation
-            )
+    if downside_deviation > 0:
+        sortino = _nullable_float(
+            math.sqrt(annualization)
+            * float(np.mean(excess_returns))
+            / downside_deviation
+        )
 
     running_peak = np.maximum.accumulate(values)
     drawdowns = 1.0 - values / running_peak

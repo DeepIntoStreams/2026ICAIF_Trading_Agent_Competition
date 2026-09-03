@@ -69,16 +69,14 @@ def test_leaderboard_rank_direction(tmp_path):
 
 @pytest.mark.skipif(not DATA_ROOT.exists(), reason="market data not present")
 def test_panel_has_no_lookahead():
-    """Features must use only closes strictly BEFORE the session date (regression for the
-    day-t close leak found during development)."""
+    """The observation exposes only raw completed daily bars STRICTLY BEFORE the session date;
+    the decision is made at the 9:00 AM ET cutoff (before the open), so no day-t price leaks."""
     from panel import PanelBuilder
-    import pandas as pd
     pb = PanelBuilder(str(DATA_ROOT))
     panel = pb.build("2026-06-05")
-    from portfolio_agent.observation import compute_market_features
-    df = pb.prices["AAPL"]
-    hist = df[df["date"] < pd.Timestamp("2026-06-05")]
-    expected = compute_market_features(hist["adj_close"].to_numpy(), hist["volume"].to_numpy())
-    assert panel["market_features"]["AAPL"] == expected
-    # the day-t OPEN is exposed (it has happened by the cutoff)
-    assert panel["assets"][0]["open_price"] is not None
+    bars = panel["market_history"]["AAPL"]
+    assert bars, "expected raw OHLCV history"
+    assert all(b["date"] < "2026-06-05" for b in bars)          # every bar strictly before t
+    assert set(bars[-1]) == {"date", "open", "high", "low", "close", "volume"}
+    assert "market_features" not in panel                       # raw-only: no engineered features
+    assert "open_price" not in panel["assets"][0]               # no day-t price at all

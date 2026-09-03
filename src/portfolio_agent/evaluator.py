@@ -1,4 +1,11 @@
-"""Walk-forward portfolio evaluator with strict security boundary."""
+"""Walk-forward portfolio evaluator with strict security boundary.
+
+LEGACY / research harness. This is NOT the official competition scorer. It still uses the older
+repair-and-next-open model and is kept only for the archived experiment scripts under `scripts/`
+(run_evaluation.py, exp3_*, prototype_backtest.py). The authoritative competition evaluation +
+backtesting lives in `competition/code/engine.py` (reject-not-repair, 9:00 AM ET cutoff, same-day
+open execution). Do not use this module for competition scoring.
+"""
 
 from __future__ import annotations
 

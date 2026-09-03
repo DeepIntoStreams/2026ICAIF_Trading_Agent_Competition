@@ -10,7 +10,7 @@ performance depends on the quality of these repeated decisions. This makes tradi
 setting for autonomous agents that map market observations directly to portfolio actions - and
 one where evaluation is hard, because most benchmarks rely on historical backtests where the
 data is no longer genuinely unseen. Participants are challenged to build an agent that manages
-a portfolio of the top U.S. equities and is evaluated **live**, on newly released market data,
+a portfolio of the popular U.S. equities and is evaluated **live**, on newly released market data,
 under realistic costs and risk constraints. This competition bridges agent design and
 portfolio management, encouraging robust, auditable systems for algorithmic trading and risk
 management.
@@ -27,35 +27,36 @@ treasury management, and market-microstructure research.
 
 The goal of this competition is to develop robust trading agents that manage a long-only
 portfolio over a fixed universe of U.S. equities, incorporating heterogeneous information
-sources. On each trading day, given the day's market data, fundamentals, and news, an agent
+sources. On each trading day, given the previous days' market data, fundamentals, and news, an agent
 returns target portfolio weights for the next trading day.
 
-**Dataset.** The dataset covers a fixed universe of **30** U.S.-listed equities across six
+**Dataset.** The competition covers a fixed universe of **30** U.S.-listed equities across six
 sector groups (technology, finance, healthcare, consumer, industrial & energy, communication &
-utilities), spanning several years. For each asset and trading day, three information types are
-provided: **(1) market data** - daily open, high, low, close, and volume under a consistent
-adjusted-price convention, summarized as rolling returns, momentum, and volatility features;
-**(2) fundamental data** - quarterly profitability, growth, and leverage ratios, aligned
-point-in-time; and **(3) news** - a daily stream of public financial news for the universe,
-timestamped to when it became available. All data is delivered point-in-time: nothing is dated
-after the daily decision cutoff.
+utilities), spanning several years. The organizers **provide** two data types for each asset and
+trading day: **(1) market price-volume data** - daily open, high, low, close, and volume, with
+derived features such as rolling returns, momentum, and volatility; and **(2) fundamental data** -
+quarterly profitability, growth, and leverage ratios. **News is not provided by the organizers**;
+participants may add public financial news at their own discretion, from the public sources we
+recommend on the **Data** page.
 
-**Task.** Each agent implements the mapping πθ : (Oₜ, Sₜ) → wₜ₊₁. Oₜ is the information available
-on day t - the full history of prices, fundamentals, and news (every
-item whose availability timestamp is at or before the cutoff), together with any state or
-memory the agent carries across days. It may use **nothing dated after the cutoff** (no
-look-ahead). Sₜ is the agent's portfolio state (current weights, cash ratio, drawdown), and
-wₜ₊₁ are the target weights executed on day t+1. The task is inherently sequential: each action
-changes the portfolio through execution and cost, and returns compound over the horizon. Weights are long-only, capped at
-**10%** per asset with gross exposure ≤ **100%**; the remainder is held as cash. There is no
-restriction on how πθ is built (expert rules, reinforcement learning, forecasting, LLMs, or any
-combination), provided it implements the standardized interface.
+**Task.** Formally, on each trading day t+1 the agent observes Oₜ = (Xₜ, Zₜ, Nₜ) - the market,
+fundamental, and news information available up to the cutoff time (**9:00 AM ET**) - together
+with its portfolio state Sₜ, comprising current weights, cash ratio, and drawdown. Each agent πθ
+implements the mapping πθ : (Oₜ, Sₜ) → wₜ₊₁ ∈ W, where wₜ₊₁ are the target portfolio weights
+submitted at the cutoff and executed at the open of day t+1, and W is the feasible set defined by
+the trading constraints. The task is inherently sequential: each action affects the portfolio
+state through execution and costs, and returns compound over the evaluation horizon. There is no
+restriction on how πθ is built, provided it implements the above mapping. Weights are long-only,
+capped at **10%** per asset with gross exposure ≤ **100%**; the remainder is held as cash.
 
-**Evaluation and starter kit.** Agents are evaluated over the live period on a multi-metric
-framework spanning profitability, risk-adjusted performance, risk management, execution
-quality, and integrity/reproducibility, combined into a weighted-average rank and a two-stage
-winner selection. **The full metric definitions, the weighting, and the winner-selection
-procedure are detailed on the Evaluation page.** To accelerate onboarding, we provide a
+**Evaluation and starter kit.** Agents are evaluated over the **live period** on a multi-metric
+framework spanning profitability, risk-adjusted performance, risk management, and execution
+quality. Teams are ranked separately under each metric (M1-M9)
+and the metric ranks are averaged to obtain the overall ranking. 
+**Final-ranking eligibility requires completing the required final materials (a video demo, plus
+code and models and data) and passing the organizers' reproducibility check** (see the Data and Terms
+pages). **The full metric definitions and the ranking procedure are detailed on the Evaluation
+page.** To accelerate onboarding, we provide a
 **Starter Kit** covering: (1) data access and the observation format; (2) baseline agents built
 several ways; (3) the local backtest and evaluation pipeline (identical to the official engine);
 and (4) submission formatting.
@@ -72,14 +73,14 @@ tooling.
 
 ## Award
 
-The top-ranked teams will be invited to present their solutions at **ACM ICAIF 2026**. **Any
-travel support and additional recognition will be announced on the platform.**
+The top winners / winning teams of the hackathon will be invited to
+present their work at ACM ICAIF 2026, the 7th ACM International Conference on AI in Finance, taking place November 14-17, 2026 at Bocconi University in Milan, Italy.
 
-## Key dates (GMT+8)
+## Key dates (US Eastern Time)
 
 - **Competition launch (development & validation opens): Oct 1, 2026**
-- **Live competition begins: Oct 27, 2026**
-- **Competition end (final live trading day): 23:59, Nov 7, 2026**
+- **Live competition begins: Oct 26, 2026** (first trading day, 9:30 AM ET market open)
+- **Competition end (final live trading day): Nov 6, 2026**
 - **Winner announcement: Nov 10, 2026**
 
 ## Registration
@@ -112,8 +113,7 @@ competition.
 
 ## Citation
 
-Xi et al. 2026. ACM ICAIF 2026: Trading Agent Competition,
+X. Xi, Y. Bao, H.C. Nga, Q. Wang, Y. Ang,  A. K. H. Tung, Y. Han, X. Zhang, H. Ni, and L. Szpruch.,
 **https://hackathon2.deepintomlf.ai/competitions/[ID]**
 
-Xi et al. ICAIF 2026: Trading Agent Competition Starter Kit,
-**https://github.com/DeepIntoStreams/2026ICAIF_Trading_Agent_Competition**
+X. Xi, Y. Bao, H.C. Nga,  Q. Wang, Y. Ang, A. K. H. Tung, Y. Han, X. Zhang, H. Ni, and L. Szpruch., **https://github.com/DeepIntoStreams/2026ICAIF_Trading_Agent_Competition**

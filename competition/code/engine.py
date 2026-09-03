@@ -32,7 +32,7 @@ sys.path.insert(0, str(HERE.parents[1] / "src"))       # portfolio_agent (repo/s
 
 from runner import code_hash, run_agent                # competition/code/runner.py
 from portfolio_agent.metrics import compute_metrics
-from portfolio_agent.risk import sanitize_target_weights
+from portfolio_agent.risk import validate_target_weights
 
 FEE_RATE = 0.001
 INITIAL_CAPITAL = 1_000_000.0
@@ -98,6 +98,187 @@ def _weights_from_shares(shares: dict[str, float], px: dict[str, float], nav: fl
     return {t: (sh * px[t] / nav) for t, sh in shares.items() if t in px and nav > 0}
 
 
+def settle_open(state: dict[str, Any], target_weights: Any, open_prices: dict[str, float],
+                tickers: list[str], constraints: dict[str, Any],
+                fee_rate: float = FEE_RATE, submitted: bool = True) -> dict[str, Any]:
+    """LIVE STEP 1 - at the 9:30 open (needs ONLY the open prices).
+
+    Validate WITHOUT repair (reject-not-repair) and fill a valid decision at the open. A
+    rejected or missing decision leaves holdings unchanged (no trade). Returns the new holdings
+    and the executed transaction. NAV is NOT computed here - that waits for the close.
+
+      state: {"cash": float, "shares": {ticker: qty}, "peak_nav": float}
+      returns: {new_state, transaction, weights, violations, executed}
+    """
+    cap = float(constraints.get("max_asset_weight", 0.30))
+    gross_cap = float(constraints.get("max_gross_exposure", 1.00))
+    cash = float(state["cash"])
+    shares = dict(state.get("shares", {}))
+
+    if submitted:
+        weights, violations = validate_target_weights(target_weights or {}, tickers, cap, gross_cap)
+        if violations:
+            weights = None                                     # rejected -> no trade
+    else:
+        weights, violations = None, ["no_submission"]
+
+    traded = fee = 0.0
+    if weights is not None:
+        nav_open = cash + sum(sh * open_prices[t] for t, sh in shares.items() if t in open_prices)
+        new_shares = dict(shares)
+        for t in set(shares) | set(weights):
+            o = open_prices.get(t)
+            if not o or o <= 0:
+                continue                                       # untradeable today -> keep holding
+            new_shares[t] = weights.get(t, 0.0) * nav_open / o   # absent target -> 0 (sell)
+        traded = sum(abs(new_shares.get(t, 0.0) - shares.get(t, 0.0)) * open_prices[t]
+                     for t in (set(shares) | set(new_shares)) if t in open_prices)
+        fee = traded * fee_rate
+        invested = sum(sh * open_prices[t] for t, sh in new_shares.items() if t in open_prices)
+        cash = nav_open - invested - fee
+        shares = {t: sh for t, sh in new_shares.items() if abs(sh) > 1e-12}
+
+    return {"new_state": {"cash": cash, "shares": shares, "peak_nav": float(state.get("peak_nav", 0.0))},
+            "transaction": {"traded_notional": traded, "fee": fee},
+            "weights": weights, "violations": violations, "executed": weights is not None}
+
+
+def mark_to_close(state: dict[str, Any], close_prices: dict[str, float]) -> dict[str, Any]:
+    """LIVE STEP 2 - after the 4:00 close (needs ONLY the close prices). No trading.
+
+    Value the portfolio at the close, update the running peak, and compute drawdown.
+      returns: {new_state, nav_close, positions_value, drawdown}
+    """
+    cash = float(state["cash"])
+    shares = dict(state.get("shares", {}))
+    peak_nav = float(state.get("peak_nav", 0.0))
+    positions_value = sum(sh * close_prices[t] for t, sh in shares.items() if t in close_prices)
+    nav_close = cash + positions_value
+    peak_nav = max(peak_nav, nav_close)
+    drawdown = max(0.0, (peak_nav - nav_close) / peak_nav) if peak_nav > 0 else 0.0
+    return {"new_state": {"cash": cash, "shares": shares, "peak_nav": peak_nav},
+            "nav_close": nav_close, "positions_value": positions_value, "drawdown": drawdown}
+
+
+def execute_decision(state: dict[str, Any], target_weights: Any,
+                     open_prices: dict[str, float], close_prices: dict[str, float],
+                     tickers: list[str], constraints: dict[str, Any],
+                     fee_rate: float = FEE_RATE, submitted: bool = True) -> dict[str, Any]:
+    """Combined open-fill + close-mark, for REPLAY / VALIDATION where the full bar is known at
+    once. Live servers call `settle_open` at 9:30 and `mark_to_close` at 16:00 instead.
+
+      returns: {new_state, transaction, nav_close, drawdown, weights, violations, executed}
+    """
+    o = settle_open(state, target_weights, open_prices, tickers, constraints, fee_rate, submitted)
+    c = mark_to_close(o["new_state"], close_prices)
+    return {"new_state": c["new_state"], "transaction": o["transaction"],
+            "nav_close": c["nav_close"], "drawdown": c["drawdown"], "weights": o["weights"],
+            "violations": o["violations"], "executed": o["executed"]}
+
+
+class TradingEpisode:
+    """Step-wise driver for ONE team through an N-day episode, one round-trip at a time.
+
+    This is the primitive a live/validation server wraps. It hands out one observation, takes one
+    decision, executes it, and advances - the same sequential observation -> decision -> execute
+    loop the participant experiences, whether the server drives it fast (Validation) or one real
+    trading day at a time (Official Competition):
+
+        ep = TradingEpisode(dates, panels, market, tickers, cap, gross_cap)
+        while not ep.done:
+            obs = ep.observation()      # send this (incl. portfolio state) to the participant
+            weights = ...               # receive their decision_response target_weights
+            ep.submit(weights)          # validate (reject-not-repair), fill at the open, advance
+        summary = ep.result()           # M1-M9 for the episode
+
+    Semantics are identical to the backtester (authoritative model): the observation is
+    point-in-time (market/fundamentals through the PREVIOUS close, NO current-day price; portfolio
+    state valued at the previous close); a submitted-invalid decision is REJECTED and counts one
+    violation day toward M9; a missing decision is no-trade (NOT counted); a valid decision fills
+    at that day's open under the 0.1% fee. `observation()` has no side effects and may be called
+    repeatedly for the current day; `submit()` advances to the next day.
+    """
+
+    def __init__(self, dates: list[str], panels: dict[str, Any], market: dict[str, Any],
+                 tickers: list[str], cap: float, gross_cap: float,
+                 initial_capital: float = INITIAL_CAPITAL, fee_rate: float = FEE_RATE):
+        self.dates, self.panels, self.market, self.tickers = dates, panels, market, tickers
+        self.cap, self.gross_cap = cap, gross_cap
+        self.initial_capital, self.fee_rate = initial_capital, fee_rate
+        self.i = 0
+        self.cash = initial_capital
+        self.peak_nav = initial_capital
+        self.shares: dict[str, float] = {}
+        self.nav_series: list[float] = []
+        self.total_cost = self.total_traded = 0.0
+        self.violation_days = 0
+
+    def _op(self, d, t): return self.market[d].get(t, {}).get("adj_open")
+    def _cl(self, d, t): return self.market[d].get(t, {}).get("adj_close")
+
+    @property
+    def done(self) -> bool:
+        return self.i >= len(self.dates)
+
+    @property
+    def current_date(self) -> str | None:
+        return None if self.done else self.dates[self.i]
+
+    def observation(self) -> dict[str, Any]:
+        """The official observation for the current trading day: the shared panel plus this team's
+        portfolio state valued at the previous close. No side effects."""
+        if self.done:
+            raise RuntimeError("episode is finished")
+        d = self.dates[self.i]
+        prev_d = self.dates[self.i - 1] if self.i > 0 else None
+        if prev_d is None:
+            state_nav, state_weights, cash_ratio = self.initial_capital, {}, 1.0
+        else:
+            pcpx = {t: self._cl(prev_d, t) for t in self.shares if self._cl(prev_d, t)}
+            state_nav = self.cash + sum(sh * pcpx[t] for t, sh in self.shares.items() if t in pcpx)
+            state_weights = _weights_from_shares(self.shares, pcpx, state_nav)
+            cash_ratio = (self.cash / state_nav) if state_nav > 0 else 1.0
+        peak = self.peak_nav if self.peak_nav > 0 else state_nav
+        drawdown = max(0.0, (peak - state_nav) / peak) if peak > 0 else 0.0
+        obs = dict(self.panels[d])
+        obs["portfolio"] = {"weights": state_weights, "cash_ratio": cash_ratio,
+                            "nav": state_nav, "drawdown": drawdown}
+        return obs
+
+    def submit(self, raw_weights: Any, submitted: bool = True) -> dict[str, Any]:
+        """Validate WITHOUT repair, execute a valid decision at today's open, mark NAV at today's
+        close, and advance. `submitted=False` = no decision arrived (no trade, not counted toward
+        M9). Returns the per-day server verdict."""
+        if self.done:
+            raise RuntimeError("episode is finished")
+        d = self.dates[self.i]
+        open_px = {t: self._op(d, t) for t in self.tickers if self._op(d, t)}
+        close_px = {t: self._cl(d, t) for t in self.tickers if self._cl(d, t)}
+        r = execute_decision(
+            {"cash": self.cash, "shares": self.shares, "peak_nav": self.peak_nav},
+            raw_weights, open_px, close_px, self.tickers,
+            {"max_asset_weight": self.cap, "max_gross_exposure": self.gross_cap},
+            fee_rate=self.fee_rate, submitted=submitted)
+        self.cash = r["new_state"]["cash"]
+        self.shares = r["new_state"]["shares"]
+        self.peak_nav = r["new_state"]["peak_nav"]
+        self.total_cost += r["transaction"]["fee"]
+        self.total_traded += r["transaction"]["traded_notional"]
+        if submitted and r["violations"]:                      # submitted-invalid -> M9 (no-show not)
+            self.violation_days += 1
+        self.nav_series.append(r["nav_close"])
+        self.i += 1
+        return {"session_date": d, "executed": r["executed"],
+                "target_weights": r["weights"] or {}, "violations": r["violations"]}
+
+    def result(self) -> dict[str, Any]:
+        """M1-M9 for the completed episode."""
+        return compute_metrics(
+            self.nav_series, initial_capital=self.initial_capital,
+            total_transaction_cost=self.total_cost, total_trade_value=self.total_traded,
+            violation_steps=self.violation_days, decision_steps=len(self.dates))
+
+
 def run_team(out_dir: str, team_id: str, data_root: str,
              code_dir: str | None = None, posted_dir: str | None = None,
              timeout_seconds: float = 60.0) -> dict[str, Any]:
@@ -130,104 +311,57 @@ def run_team(out_dir: str, team_id: str, data_root: str,
     cap = float(constraints.get("max_asset_weight", 0.10))
     gross_cap = float(constraints.get("max_gross_exposure", 1.00))
 
-    def op(d, t): return market[d].get(t, {}).get("adj_open")
-    def cl(d, t): return market[d].get(t, {}).get("adj_close")
+    # Drive the episode ONE ROUND-TRIP AT A TIME - the same primitive the live/validation server
+    # wraps (send observation -> receive decision -> execute -> advance).
+    ep = TradingEpisode(dates, panels, market, tickers, cap, gross_cap)
+    while not ep.done:
+        d = ep.current_date
 
-    cash = INITIAL_CAPITAL
-    shares: dict[str, float] = {}
-    queued: dict[str, float] | None = None       # weights decided yesterday, fill at today's open
-    prev_target: dict[str, float] = {}
-    nav_series: list[float] = []
-    total_cost = total_traded = 0.0
-    violation_days = 0
-
-    for d in dates:
-        # 1) settle yesterday's decision at today's OPEN
-        if queued is not None:
-            nav_open = cash + sum(sh * op(d, t) for t, sh in shares.items() if op(d, t))
-            new_shares = dict(shares)
-            for t, w in queued.items():
-                o = op(d, t)
-                if o and o > 0:
-                    new_shares[t] = w * nav_open / o
-            traded = 0.0
-            for t in set(shares) | set(new_shares):
-                o = op(d, t)
-                if not o:
-                    new_shares[t] = shares.get(t, 0.0)
-                    continue
-                traded += abs(new_shares.get(t, 0.0) - shares.get(t, 0.0)) * o
-            fee = traded * FEE_RATE
-            total_cost += fee
-            total_traded += traded
-            invested = sum(sh * op(d, t) for t, sh in new_shares.items() if op(d, t))
-            cash = nav_open - invested - fee
-            shares = {t: sh for t, sh in new_shares.items() if abs(sh) > 1e-12}
-
-        # 2) build + RECORD the organizer's outgoing request (shared panel + portfolio state)
-        open_px = {t: op(d, t) for t in tickers if op(d, t)}
-        nav_now = cash + sum(sh * open_px[t] for t, sh in shares.items() if t in open_px)
-        observation = dict(panels[d])
-        observation["portfolio"] = {
-            "weights": _weights_from_shares(shares, open_px, nav_now),
-            "cash_ratio": (cash / nav_now) if nav_now > 0 else 1.0,
-            "nav": nav_now,
-        }
+        # 1) SEND: the observation + this team's portfolio state, recorded for reproducibility
+        observation = ep.observation()
         request = {"type": "decision_request", "protocol_version": "0.1",
                    "team_id": team_id, "session_date": d,
                    "deadline_utc": observation.get("event_time_utc"),
                    "observation": observation}
         (req_dir / f"{d}.json").write_text(json.dumps(request))
 
-        # 3) obtain the team's weights
-        if posted_dir is not None:                        # LIVE INTAKE: read what the team POSTED
+        # 2) RECEIVE the decision: POSTed (live intake) or by running the team's code (sim/audit)
+        submitted, raw = False, {}
+        if posted_dir is not None:                         # LIVE INTAKE: read what the team POSTED
             post_path = Path(posted_dir) / team_id / f"{d}.json"
             if post_path.exists():
                 post = json.loads(post_path.read_text())
-                raw = post.get("target_weights", {}) or {}
+                raw, submitted = post.get("target_weights", {}) or {}, True
                 audit = {"source": "posted", "post_path": str(post_path),
                          "agent_version": post.get("metadata", {}).get("agent_version")}
-                ok = True
             else:
-                raw, ok = dict(prev_target), False        # no submission -> retain previous
                 audit = {"source": "posted", "reason": "no_submission"}
-        else:                                             # SIMULATE / AUDIT: run their code
+        else:                                              # SIMULATE / AUDIT: run their code
             res = run_agent(code_dir, observation, panels[d]["assets"], constraints, timeout_seconds)
-            ok = res["ok"]
             audit = res["audit"]
-            raw = res["target_weights"] if ok else dict(prev_target)
-            if not ok:
-                audit["carried_previous"] = True
+            if res["ok"]:
+                raw, submitted = res["target_weights"], True
+            else:
+                audit["no_submission"] = True
 
-        # 4) validate / repair -> M9
-        sanitized, violations = sanitize_target_weights(raw, tickers, cap, gross_cap)
-        if (not ok) or violations:
-            violation_days += 1
-        prev_target = dict(sanitized)
-        queued = dict(sanitized)
+        # 3) VALIDATE (reject-not-repair), EXECUTE at the open, ADVANCE
+        verdict = ep.submit(raw, submitted)
 
-        # 5) record the server-side validated ledger entry (the reproducible trail)
+        # 4) RECORD the server-side ledger entry (the reproducible trail)
         (sub_dir / f"{d}.json").write_text(json.dumps({
             "type": "decision_response", "protocol_version": "0.1",
             "team_id": team_id, "session_date": d,
-            "target_weights": sanitized,
-            "server": {"violations": violations, "ok": ok, "audit": audit},
+            "target_weights": verdict["target_weights"],
+            "server": {"submitted": submitted, "executed": verdict["executed"],
+                       "violations": verdict["violations"], "audit": audit},
         }, indent=2))
 
-        # 6) mark NAV at today's CLOSE
-        nav_close = cash + sum(sh * cl(d, t) for t, sh in shares.items() if cl(d, t))
-        nav_series.append(nav_close)
-
-    metrics = compute_metrics(
-        nav_series, initial_capital=INITIAL_CAPITAL,
-        total_transaction_cost=total_cost, total_trade_value=total_traded,
-        violation_steps=violation_days, decision_steps=len(dates))
     summary = {"team_id": team_id,
                "code_hash": code_hash(code_dir) if code_dir else "posted",
                "source": "posted" if posted_dir else "code",
-               "n_days": len(dates), "metrics": metrics,
-               "final_nav": nav_series[-1],
-               "dates": dates, "nav_series": [round(v, 2) for v in nav_series]}
+               "n_days": len(dates), "metrics": ep.result(),
+               "final_nav": ep.nav_series[-1],
+               "dates": dates, "nav_series": [round(v, 2) for v in ep.nav_series]}
     (out / "results").mkdir(parents=True, exist_ok=True)
     (out / "results" / f"{team_id}.json").write_text(json.dumps(summary, indent=2, default=str))
     return summary
@@ -242,10 +376,29 @@ _HIGHER_BETTER = {
 }
 
 
-def leaderboard(out_dir: str) -> list[dict[str, Any]]:
-    """Average-rank leaderboard across M1-M9 (paper sec 3.3; lower avg rank wins)."""
+# the four evaluation dimensions (each weighted equally under the two-level ranking)
+_DIMENSIONS = {
+    "profitability": ["m1_cumulative_return", "m2_daily_win_rate"],
+    "risk_adjusted": ["m3_sharpe_ratio", "m4_sortino_ratio"],
+    "risk_management": ["m5_maximum_drawdown", "m6_value_at_risk_95", "m7_expected_shortfall_95"],
+    "execution": ["m8_turnover", "m9_violation_rate"],
+}
+
+
+def leaderboard(out_dir: str, method: str = "dimension") -> list[dict[str, Any]]:
+    """Average-rank leaderboard; lower `avg_rank` wins.
+
+      method="dimension" (default; matches the Evaluation page): rank teams under each metric,
+        average the ranks WITHIN each of the four dimensions, then average the four dimension
+        scores - so every dimension carries equal weight (1/4).
+      method="flat" (2025 style): the plain average of the nine metric ranks (each metric 1/9).
+
+    Ties break by higher cumulative return (M1), then lower max drawdown (M5), then team_id
+    (a deterministic stand-in for registration order, which the engine does not track).
+    """
     results_dir = Path(out_dir) / "results"
-    teams = [json.loads(p.read_text()) for p in results_dir.glob("*.json")]
+    teams = [json.loads(p.read_text()) for p in results_dir.glob("*.json")
+             if p.name != "leaderboard.json"]     # never re-ingest our own output
     if not teams:
         return []
     ranks = {t["team_id"]: {} for t in teams}
@@ -258,12 +411,19 @@ def leaderboard(out_dir: str) -> list[dict[str, Any]]:
     board = []
     for t in teams:
         tid = t["team_id"]
-        avg = sum(ranks[tid].values()) / len(_HIGHER_BETTER)
-        board.append({"team_id": tid, "avg_rank": round(avg, 3),
+        r = ranks[tid]
+        dim_scores = {dim: sum(r[k] for k in keys) / len(keys)
+                      for dim, keys in _DIMENSIONS.items()}
+        if method == "flat":
+            avg = sum(r.values()) / len(_HIGHER_BETTER)
+        else:
+            avg = sum(dim_scores.values()) / len(_DIMENSIONS)
+        board.append({"team_id": tid, "avg_rank": round(avg, 4), "method": method,
                       "m1_cumulative_return": t["metrics"]["m1_cumulative_return"],
                       "m5_maximum_drawdown": t["metrics"]["m5_maximum_drawdown"],
-                      "ranks": ranks[tid]})
-    # winner = lowest avg rank; ties -> higher return, then lower MDD
-    board.sort(key=lambda r: (r["avg_rank"], -r["m1_cumulative_return"], r["m5_maximum_drawdown"]))
+                      "dimension_scores": {d: round(s, 4) for d, s in dim_scores.items()},
+                      "ranks": r})
+    board.sort(key=lambda x: (x["avg_rank"], -x["m1_cumulative_return"],
+                              x["m5_maximum_drawdown"], x["team_id"]))
     (results_dir / "leaderboard.json").write_text(json.dumps(board, indent=2, default=str))
     return board
