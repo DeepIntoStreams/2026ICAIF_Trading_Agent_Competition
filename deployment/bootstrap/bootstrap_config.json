@@ -1,5 +1,13 @@
 {
   "calendar": "XNYS",
+  "initial_capital_usd": "1000000.00",
+  "constraints": {
+    "long_only": true,
+    "max_asset_weight": 0.10,
+    "max_gross_exposure": 1.00,
+    "fee_rate": 0.001,
+    "slippage_bps": 0.0
+  },
   "instruments": [
     {"ticker": "AAPL", "company_name": "Apple Inc.", "sector": "Technology"},
     {"ticker": "MSFT", "company_name": "Microsoft Corporation", "sector": "Technology"},

@@ -30,11 +30,18 @@ or extends official calendar rows. It then downloads one daily Yahoo Finance bar
 for every active instrument and commits the day only when the complete universe
 is present. Re-running it is safe.
 
-Until Competition implements the `CompetitionPort` declared in `daily_live.py`,
-the command deliberately ends with `state=awaiting_competition`. It does not
-publish an observation without execution, close valuation, and per-team account
-checks. A production scheduler (CronJob, systemd timer, or equivalent) should
-invoke this command after the provider's end-of-day data is complete.
+`DailyCompetitionService` owns the platform workflow: it freezes received
+weights with Competition's reject-not-repair validator, creates explicit hold
+fallbacks, and publishes the next observations. Its thin `CompetitionAdapter`
+converts ticker-facing platform data to the core's Decimal/instrument-id input,
+then delegates accounting and trading persistence to Competition's
+`advance_day()` and `TradingRepository`. Fundamentals remain an empty object in
+the observation until a separate point-in-time feed is integrated.
+
+The complete team batch and all observations commit atomically. Re-running a
+completed day returns `state=already_completed` without charging fees twice. A
+production scheduler (CronJob, systemd timer, or equivalent) should invoke this
+command after the provider's end-of-day data is complete.
 
 ## Run
 

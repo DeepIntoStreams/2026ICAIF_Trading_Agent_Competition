@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -24,6 +25,11 @@ def load_config(path: Path) -> dict[str, Any]:
     tickers = [item["ticker"] for item in instruments]
     if len(tickers) != len(set(tickers)):
         raise ValueError("config.instruments contains duplicate tickers")
+    if Decimal(str(config.get("initial_capital_usd", "0"))) <= 0:
+        raise ValueError("config.initial_capital_usd must be positive")
+    constraints = config.get("constraints")
+    if not isinstance(constraints, dict):
+        raise ValueError("config.constraints must be an object")
     config["_config_sha256"] = hashlib.sha256(raw).hexdigest()
     return config
 

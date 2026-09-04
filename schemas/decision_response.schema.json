@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://icaif2026.example/portfolio_agent/decision_response.schema.json",
   "title": "DecisionResponse",
-  "description": "Envelope a participant agent returns before deadline_utc. Structural validation only; semantic repair (caps, gross exposure, unknown/short) is applied server-side by sanitize_target_weights and recorded in M9. Well-formed-but-out-of-range weights are ACCEPTED here and repaired, not rejected.",
+  "description": "Envelope a participant agent returns before deadline_utc. Structural validation happens at receipt; semantic validation later applies the Competition engine's reject-not-repair policy and records violations for M9.",
   "type": "object",
   "required": ["type", "protocol_version", "run_id", "session_date", "target_weights"],
   "additionalProperties": false,
@@ -17,7 +17,7 @@
     },
     "session_date": {"type": "string", "format": "date"},
     "target_weights": {
-      "description": "Ticker -> target weight. Numeric and finite. Cash is implicit: cash_weight = 1 - sum(target_weights). Out-of-range values are repaired server-side, not rejected.",
+      "description": "Ticker -> target weight. Numeric and finite. Cash is implicit: cash_weight = 1 - sum(target_weights). A semantically invalid vector is rejected as a whole and is never clipped or rescaled.",
       "type": "object",
       "additionalProperties": {"type": "number"}
     },

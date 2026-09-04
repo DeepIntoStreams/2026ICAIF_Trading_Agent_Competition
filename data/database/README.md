@@ -160,8 +160,8 @@ day. `execution_day_id` explicitly links the decision to the next trading day;
 the engine never guesses the execution date from calendar arithmetic.
 
 `status` describes receipt/validation/execution progress. A structurally valid
-submission may contain weights that are repaired by the configured validator;
-the raw document remains unchanged.
+submission may still fail semantic validation. The configured reject-not-repair
+validator then rejects the complete vector; the raw document remains unchanged.
 
 `validator_version` and `validation_policy_json` freeze the exact validation
 implementation and constraint values used for this submission. Validation rules
@@ -177,6 +177,10 @@ records accepted requests, invalid envelopes, late requests, daily-limit
 rejections, idempotent replays, and idempotency conflicts. Only an `ACCEPTED`
 attempt creates a canonical `decision_submissions` row.
 
+An organizer-created `FALLBACK` submission is not an HTTP attempt, so its
+`intake_attempt_id` is null. Its system origin remains explicit in
+`decision_submissions.source` and the audit log.
+
 ### `submission_weights`
 
 The execution-facing normalized target vector. There is one row per instrument
@@ -185,8 +189,9 @@ for each submission:
 - `was_provided` says whether the ticker appeared in the participant payload;
 - `raw_weight` is nullable for an omitted or non-numeric ticker (the exact raw
   value always remains available in `decision_submissions.raw_payload_json`);
-- `sanitized_weight` is the exact numeric target consumed by execution;
-- `validation_codes_json` records zero or more repair/validation codes.
+- `sanitized_weight` is the frozen numeric target consumed by execution for an
+  accepted vector (the column name is retained for schema compatibility);
+- `validation_codes_json` records zero or more validation codes.
 
 The validator inserts the complete vector in one transaction. Execution loads it
 with one set query:
@@ -233,13 +238,14 @@ only ID Competition may use for normalized weights.
 6. verify the inserted count equals `expected_weight_count`;
 7. update `stored_weight_count`, `sanitized_gross_weight`, and
    `weights_processed_at`;
-8. update the submission to `QUEUED` and create its `PENDING` execution;
+8. update an accepted submission to `QUEUED`; the after-close trading repository
+   creates and completes its execution atomically with the trading trajectory;
 9. commit everything together.
 
 If processing fails, the raw submission remains `RECEIVED` and can be resumed by
-ID. If validation rejects it, the service stores whatever normalized diagnostic
-rows are available and changes the submission to `REJECTED`; no execution is
-created.
+ID. If validation rejects it, the service stores a complete zero diagnostic
+vector and changes the submission to `REJECTED`. The after-close hold path still
+persists a zero-trade execution, CLOSE valuation, performance, and observation.
 
 The execution engine never parses raw participant JSON and never sanitizes
 weights. Its database adapter accepts only a `QUEUED` submission whose stored
@@ -336,8 +342,9 @@ Within a database transaction or an idempotent job:
 
 1. insert the complete T market bars and fundamentals;
 2. set T `market_status = DATA_IMPORTED`;
-3. find `PENDING` executions whose `trading_day_id = T`;
-4. execute each using T open prices;
+3. find `QUEUED` submissions whose `execution_day_id = T`, plus rejected or
+   missing submissions that must follow the hold path;
+4. execute or hold each portfolio using T open prices;
 5. insert transactions and cash-ledger entries;
 6. insert each team's `POST_OPEN` portfolio and positions;
 7. set each execution to `COMPLETED`;
@@ -363,8 +370,8 @@ handoff above:
 1. authenticate the team and verify T's deadline;
 2. receipt transaction: insert exactly one `decision_submissions` row with the
    full raw JSON, commit it, and retain the returned ID;
-3. processing transaction: normalize every active instrument, populate raw and
-   sanitized values, verify completeness, and create one `PENDING` execution for
+3. processing transaction: validate every active instrument, populate raw and
+   frozen target values, verify completeness, and queue an accepted vector for
    T+1;
 4. return the final stored receipt.
 

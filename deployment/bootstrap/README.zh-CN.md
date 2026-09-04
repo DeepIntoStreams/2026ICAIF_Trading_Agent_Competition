@@ -6,7 +6,7 @@
 
 - `init_database.py`：应用 PostgreSQL schema、同步 30 只股票、按 XNYS 官方日历创建交易日；可选择回填行情。
 - `verify_setup.py`：检查股票池、交易日以及已导入行情是否完整。
-- `bootstrap_config.json`：正式股票池和交易日历配置。
+- `bootstrap_config.json`：正式股票池、交易日历、初始资金和交易约束配置。
 - `run_records/`：每次运行的无密码 JSON 记录；默认不提交生成文件。
 
 ## 推荐顺序

@@ -1,9 +1,4 @@
-"""Idempotent organizer entry point for one live end-of-day cycle.
-
-The current boundary intentionally ends after market import. Competition should
-implement ``CompetitionPort.process_imported_day`` and return a result only after
-execution, valuation, account checks, and observation publication have committed.
-"""
+"""Idempotent organizer entry point for one complete live end-of-day cycle."""
 
 from __future__ import annotations
 
@@ -43,8 +38,8 @@ def run_daily_live(
     require_daily_live_calendar(store, trading_date)
     imported = import_market_day(store, trading_date)
     if competition is None:
-        return DailyResult(trading_date.isoformat(), True, imported,
-                           "awaiting_competition")
+        from .daily_competition_service import DailyCompetitionService
+        competition = DailyCompetitionService()
     result = competition.process_imported_day(database_url, trading_date)
     return DailyResult(trading_date.isoformat(), True, imported,
                        "competition_completed", result)
