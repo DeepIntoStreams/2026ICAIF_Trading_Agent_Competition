@@ -9,6 +9,33 @@ It deliberately does **not** sanitize weights, create executions, settle
 portfolios, or calculate the leaderboard. The Competition component consumes
 `decision_submissions` rows in `RECEIVED` state and owns those later steps.
 
+## Organizer daily automation
+
+The participant API does not create calendar rows as part of a participant
+request. `POST /api/v1/admin/trading-days` is an organizer control-plane and
+recovery endpoint that happens to be hosted by the same FastAPI process.
+
+For an end-of-day live run, configure `COMPETITION_DATABASE_URL` and invoke:
+
+```bash
+python -m deployment.live_server.daily_live
+```
+
+Without `--date`, the command selects the latest XNYS session whose official
+close has passed. `--date YYYY-MM-DD` is available for recovery and backfills.
+The official XNYS calendar must already have been provisioned by an organizer.
+The command validates the requested signal day, its next execution session, and
+the decision cutoff (30 minutes before the next exchange open). It never creates
+or extends official calendar rows. It then downloads one daily Yahoo Finance bar
+for every active instrument and commits the day only when the complete universe
+is present. Re-running it is safe.
+
+Until Competition implements the `CompetitionPort` declared in `daily_live.py`,
+the command deliberately ends with `state=awaiting_competition`. It does not
+publish an observation without execution, close valuation, and per-team account
+checks. A production scheduler (CronJob, systemd timer, or equivalent) should
+invoke this command after the provider's end-of-day data is complete.
+
 ## Run
 
 ```bash
@@ -30,7 +57,7 @@ python -m deployment.live_server.manage create-trading-day 2026-09-01 \
   --market-open-at 2026-09-01T13:30:00Z \
   --market-close-at 2026-09-01T20:00:00Z \
   --submission-open-at 2026-09-01T20:00:00Z \
-  --submission-deadline-at 2026-09-02T13:29:59Z
+  --submission-deadline-at 2026-09-02T13:00:00Z
 ```
 
 The plaintext team key is printed once. Observations and their referenced

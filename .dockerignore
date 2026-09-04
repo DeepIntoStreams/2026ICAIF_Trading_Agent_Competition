@@ -6,7 +6,6 @@ __pycache__
 *.pyc
 *.pyo
 .pytest_cache
-data
 data.zip
 outputs
 models
@@ -20,4 +19,3 @@ competition/web/state
 competition/web/store
 *.sqlite
 *.sqlite3
-
