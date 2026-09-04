@@ -1,25 +1,5 @@
 # Trading core - data contract
 
-How the live server invokes the trading core, what goes in and comes out, and what the trading
-repository persists. One worked example (his `LIVE_WORKFLOW_EXAMPLE` §6-§12) is spelled out with
-real numbers at the bottom.
-
-Files: `competition/code/engine.py` (pure core), `competition/code/trading_repo.py` (persistence),
-`competition/code/db_adapter.py` (record -> row mapping, the contract in code).
-
-## Ownership split
-
-- **Yours (platform):** teams, instruments, trading_days, `decision_submissions`, `submission_weights`,
-  observations, market_bars, fundamental_records, audit_logs; auth, scheduler, ingestion,
-  cutoff/recovery, and calling the trading core at the right time.
-- **Ours (trading):** the pure core + the trading repository that persists the trajectory:
-  `executions`, `transactions`, `cash_ledger`, `portfolio_snapshots`, `position_snapshots`,
-  `daily_performance`, and restoring the portfolio state for the next day.
-
-```
-Trading Core  ->  execution record (a dict)  ->  TradingRepository  ->  PostgreSQL
-```
-
 ## The daily call (server side, once after the T+1 close)
 
 ```python
