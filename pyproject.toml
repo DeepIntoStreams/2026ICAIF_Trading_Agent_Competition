@@ -16,7 +16,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-data = ["yfinance>=0.2.40"]
+data = ["yfinance>=0.2.40", "exchange-calendars>=4.5"]
+server = [
+  "fastapi>=0.116,<0.117",
+  "psycopg[binary]>=3.2,<4",
+  "uvicorn>=0.35,<0.36",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

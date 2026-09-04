@@ -4,13 +4,17 @@
   "title": "DecisionResponse",
   "description": "Envelope a participant agent returns before deadline_utc. Structural validation only; semantic repair (caps, gross exposure, unknown/short) is applied server-side by sanitize_target_weights and recorded in M9. Well-formed-but-out-of-range weights are ACCEPTED here and repaired, not rejected.",
   "type": "object",
-  "required": ["type", "protocol_version", "run_id", "team_id", "session_date", "target_weights"],
+  "required": ["type", "protocol_version", "run_id", "session_date", "target_weights"],
   "additionalProperties": false,
   "properties": {
     "type": {"const": "decision_response"},
     "protocol_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
     "run_id": {"type": "string", "minLength": 1},
-    "team_id": {"type": "string", "minLength": 1},
+    "team_id": {
+      "description": "Optional compatibility metadata only. Authentication comes from the API key; if supplied this value must match the authenticated team.",
+      "type": "string",
+      "minLength": 1
+    },
     "session_date": {"type": "string", "format": "date"},
     "target_weights": {
       "description": "Ticker -> target weight. Numeric and finite. Cash is implicit: cash_weight = 1 - sum(target_weights). Out-of-range values are repaired server-side, not rejected.",
