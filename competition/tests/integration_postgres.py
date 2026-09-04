@@ -1,13 +1,15 @@
-"""End-to-end integration: engine day-record -> his PostgreSQL schema -> read back.
+"""End-to-end integration: TradingRepository against his real PostgreSQL schema.
 
-Proves the trading core is database-compatible against the REAL schema (`data/database/schema.sql`,
-mirrored via COMPETITION_SCHEMA_SQL). It reproduces his LIVE_WORKFLOW_EXAMPLE §6-§12 worked example
-(team_alpha, 2026-09-01 -> 2026-09-02), drives `execute_decision`, persists every row through
-`db_adapter`, then reconstructs NAV and performance from the stored rows and checks they match.
+Proves the trading persistence layer (competition/code/trading_repo.py) works against the REAL
+schema (`data/database/schema.sql`, mirrored via COMPETITION_SCHEMA_SQL). It reproduces his
+LIVE_WORKFLOW_EXAMPLE §6-§12 (team_alpha, 2026-09-01 -> 2026-09-02):
 
-The `persist_day` function below is a minimal reference of his `repositories.py` / `daily_service.py`:
-it resolves natural keys (team_code/ticker/date) to surrogate ids and fills the bookkeeping columns
-the server owns. The engine and db_adapter never touch the database.
+  1. seed the PLATFORM tables the server owns (teams, instruments, trading_days, the prior CLOSE
+     portfolio, the observation, the received+validated submission);
+  2. `repo.load_state(team)`   -> reconstruct the engine state from the DB;
+  3. `execute_decision(...)`   -> the after-close batch (id-first, Decimal);
+  4. `repo.persist_day(...)`   -> persist the whole trajectory atomically;
+  5. read it back and reconstruct NAV / performance / cash-continuity from the stored rows.
 
 Run:
     COMPETITION_DATABASE_URL=postgresql://... COMPETITION_SCHEMA_SQL=/path/schema.sql \
@@ -26,17 +28,17 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "code"))
 sys.path.insert(0, str(ROOT.parent / "src"))
 
-import db_adapter
 import engine
+from trading_repo import TradingRepository
 
 NOW = datetime(2026, 9, 2, 21, 0, tzinfo=timezone.utc)
 
-# --- his §6/§8 worked example ------------------------------------------------------------------
+# --- his §6/§8 worked example (id-first: the engine runs on instrument_ids) --------------------
 TEAM_ID = 1
 INSTR = {"AAPL": 1, "MSFT": 2, "NVDA": 3, "JPM": 4}     # ticker -> instrument_id (seeds names only)
-AAPL, MSFT, NVDA, JPM = 1, 2, 3, 4                       # the engine runs on these ids (id-first)
-ACTIVE = [AAPL, MSFT, NVDA, JPM]                         # active universe as instrument_ids
-SIGNAL_DAY_ID, EXEC_DAY_ID = 1, 2
+AAPL, MSFT, NVDA, JPM = 1, 2, 3, 4
+ACTIVE = [AAPL, MSFT, NVDA, JPM]
+SIGNAL_DAY_ID, EXEC_DAY_ID, SUBMISSION_ID = 1, 2, 1
 SIGNAL_DATE, EXEC_DATE = "2026-09-01", "2026-09-02"
 CONSTRAINTS = {"max_asset_weight": 0.30, "max_gross_exposure": 1.00}
 
@@ -53,159 +55,116 @@ def _hash(obj) -> str:
     return hashlib.sha256(json.dumps(obj, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def seed_static(cur):
-    cur.execute("INSERT INTO teams (id, team_code, display_name, api_key_hash, status, created_at, updated_at)"
-                " VALUES (%s,%s,%s,%s,'ACTIVE',%s,%s)",
-                (TEAM_ID, "team_alpha", "Team Alpha", "hash", NOW, NOW))
+def seed_platform(conn):
+    """Everything the SERVER owns: teams, instruments, calendar, prior CLOSE portfolio, the served
+    observation, and the received+validated submission. (Trading tables are the repo's job.)"""
+    conn.execute("INSERT INTO teams (id, team_code, display_name, api_key_hash, status, created_at,"
+                 " updated_at) VALUES (%s,%s,%s,%s,'ACTIVE',%s,%s)",
+                 (TEAM_ID, "team_alpha", "Team Alpha", "hash", NOW, NOW))
     for tk, iid in INSTR.items():
-        cur.execute("INSERT INTO instruments (id, ticker, company_name, sector, is_active, created_at)"
-                    " VALUES (%s,%s,%s,%s,TRUE,%s)", (iid, tk, tk, "Tech", NOW))
+        conn.execute("INSERT INTO instruments (id, ticker, company_name, sector, is_active,"
+                     " created_at) VALUES (%s,%s,%s,%s,TRUE,%s)", (iid, tk, tk, "Tech", NOW))
     for did, date in ((SIGNAL_DAY_ID, SIGNAL_DATE), (EXEC_DAY_ID, EXEC_DATE)):
-        cur.execute(
+        d = int(date[-2:])
+        conn.execute(
             "INSERT INTO trading_days (id, trading_date, market_open_at, market_close_at,"
             " submission_open_at, submission_deadline_at, created_at, updated_at)"
             " VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-            (did, date, datetime(2026, 9, int(date[-2:]), 13, 30, tzinfo=timezone.utc),
-             datetime(2026, 9, int(date[-2:]), 20, 0, tzinfo=timezone.utc),
-             datetime(2026, 9, int(date[-2:]), 8, 0, tzinfo=timezone.utc),
-             datetime(2026, 9, int(date[-2:]), 13, 29, tzinfo=timezone.utc), NOW, NOW))
-    # prior (signal-day) CLOSE portfolio = the state the engine resumes from
+            (did, date, datetime(2026, 9, d, 13, 30, tzinfo=timezone.utc),
+             datetime(2026, 9, d, 20, 0, tzinfo=timezone.utc),
+             datetime(2026, 9, d, 8, 0, tzinfo=timezone.utc),
+             datetime(2026, 9, d, 13, 29, tzinfo=timezone.utc), NOW, NOW))
+    # prior (signal-day) CLOSE portfolio - the state the repo will reconstruct
     pos_val = sum(PRIOR["shares"][t] * PRIOR_CLOSE_PX[t] for t in PRIOR["shares"])
     nav = PRIOR["cash"] + pos_val
-    cur.execute(
-        "INSERT INTO portfolio_snapshots (id, team_id, trading_day_id, snapshot_type, cash,"
+    prior_snap_id = conn.execute(
+        "INSERT INTO portfolio_snapshots (team_id, trading_day_id, snapshot_type, cash,"
         " positions_value, nav, gross_exposure, drawdown, effective_at, created_at)"
-        " VALUES (1,%s,%s,'CLOSE',%s,%s,%s,%s,0,%s,%s)",
-        (TEAM_ID, SIGNAL_DAY_ID, PRIOR["cash"], pos_val, nav, pos_val / nav, NOW, NOW))
-    for t, q in PRIOR["shares"].items():
-        mv = q * PRIOR_CLOSE_PX[t]
-        cur.execute("INSERT INTO position_snapshots (portfolio_snapshot_id, instrument_id, quantity,"
-                    " reference_price, market_value, weight, created_at) VALUES (1,%s,%s,%s,%s,%s,%s)",
-                    (t, q, PRIOR_CLOSE_PX[t], mv, mv / nav, NOW))
-    # the exact observation served + the participant's one submission (RECEIVED)
+        " VALUES (%s,%s,'CLOSE',%s,%s,%s,%s,0,%s,%s) RETURNING id",
+        (TEAM_ID, SIGNAL_DAY_ID, PRIOR["cash"], pos_val, nav, pos_val / nav, NOW, NOW)).fetchone()[0]
+    for iid, q in PRIOR["shares"].items():
+        mv = q * PRIOR_CLOSE_PX[iid]
+        conn.execute("INSERT INTO position_snapshots (portfolio_snapshot_id, instrument_id,"
+                     " quantity, reference_price, market_value, weight, created_at)"
+                     " VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                     (prior_snap_id, iid, q, PRIOR_CLOSE_PX[iid], mv, mv / nav, NOW))
     payload = {"session_date": SIGNAL_DATE, "portfolio": {"nav": float(nav)}}
-    cur.execute("INSERT INTO observations (id, team_id, trading_day_id, close_portfolio_snapshot_id,"
-                " payload_json, payload_hash, generated_at, published_at, created_at)"
-                " VALUES (1,%s,%s,1,%s,%s,%s,%s,%s)",
-                (TEAM_ID, SIGNAL_DAY_ID, json.dumps(payload), _hash(payload), NOW, NOW, NOW))
-
-
-def persist_day(cur, rec, rows):
-    """Reference server persistence: resolve ids + fill bookkeeping, then INSERT in FK order."""
-    ds = rows["decision_submissions"][0]
-    raw = {"type": "decision_response", "target_weights": rec["decision"]["raw"]}
-    cur.execute(
-        "INSERT INTO decision_submissions (id, team_id, observation_id, signal_day_id, execution_day_id,"
-        " idempotency_key, received_at, raw_payload_json, payload_hash, source, status, rejection_reason,"
-        " validator_version, validation_policy_json, expected_weight_count, stored_weight_count,"
-        " sanitized_gross_weight, weights_processed_at, agent_version, created_at, updated_at)"
-        " VALUES (1,%s,1,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-        (TEAM_ID, SIGNAL_DAY_ID, EXEC_DAY_ID, ds["idempotency_key"], NOW, json.dumps(raw),
-         _hash(raw), ds["source"], ds["status"], ds["rejection_reason"], ds["validator_version"],
-         json.dumps(CONSTRAINTS), ds["expected_weight_count"], ds["stored_weight_count"],
-         ds["sanitized_gross_weight"], NOW, "alpha-3.1", NOW, NOW))
-    for w in rows["submission_weights"]:
-        cur.execute("INSERT INTO submission_weights (submission_id, instrument_id, was_provided,"
-                    " raw_weight, sanitized_weight, validation_codes_json, created_at)"
-                    " VALUES (1,%s,%s,%s,%s,%s,%s)",
-                    (w["instrument"], w["was_provided"], w["raw_weight"], w["sanitized_weight"],
-                     json.dumps(w["validation_codes_json"]), NOW))
-    e = rows["executions"][0]
-    cur.execute(
-        "INSERT INTO executions (id, team_id, submission_id, trading_day_id, status, engine_version,"
-        " scheduled_at, effective_at, processed_at, nav_before, cash_before, cash_after,"
-        " total_buy_value, total_sell_value, total_fee, created_at, updated_at)"
-        " VALUES (1,%s,1,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-        (TEAM_ID, EXEC_DAY_ID, e["status"], e["engine_version"], NOW, NOW, NOW, e["nav_before"],
-         e["cash_before"], e["cash_after"], e["total_buy_value"], e["total_sell_value"],
-         e["total_fee"], NOW, NOW))
-    for tx in rows["transactions"]:
-        cur.execute("INSERT INTO transactions (execution_id, instrument_id, side, shares_before,"
-                    " target_shares, quantity, price, gross_amount, fee, cash_change, status,"
-                    " effective_at, processed_at, created_at) VALUES (1,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                    (tx["instrument"], tx["side"], tx["shares_before"], tx["target_shares"],
-                     tx["quantity"], tx["price"], tx["gross_amount"], tx["fee"], tx["cash_change"],
-                     tx["status"], NOW, NOW, NOW))
-    for cl in rows.get("cash_ledger", []):
-        cur.execute("INSERT INTO cash_ledger (team_id, trading_day_id, execution_id, event_type,"
-                    " amount, balance_before, balance_after, effective_at, created_at)"
-                    " VALUES (%s,%s,1,%s,%s,%s,%s,%s,%s)",
-                    (TEAM_ID, EXEC_DAY_ID, cl["event_type"], cl["amount"], cl["balance_before"],
-                     cl["balance_after"], NOW, NOW))
-    snap_id = {"POST_OPEN": 2, "CLOSE": 3}
-    for snap in rows["portfolio_snapshots"]:
-        st = snap["snapshot_type"]
-        cur.execute("INSERT INTO portfolio_snapshots (id, team_id, trading_day_id, execution_id,"
-                    " snapshot_type, cash, positions_value, nav, gross_exposure, drawdown, effective_at,"
-                    " created_at) VALUES (%s,%s,%s,1,%s,%s,%s,%s,%s,%s,%s,%s)",
-                    (snap_id[st], TEAM_ID, EXEC_DAY_ID, st, snap["cash"], snap["positions_value"],
-                     snap["nav"], snap["gross_exposure"], snap["drawdown"], NOW, NOW))
-    for ps in rows["position_snapshots"]:
-        cur.execute("INSERT INTO position_snapshots (portfolio_snapshot_id, instrument_id, quantity,"
-                    " reference_price, market_value, weight, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                    (snap_id[ps["snapshot_type"]], ps["instrument"], ps["quantity"],
-                     ps["reference_price"], ps["market_value"], ps["weight"], NOW))
-    dp = rows["daily_performance"][0]
-    cur.execute("INSERT INTO daily_performance (team_id, trading_day_id, close_portfolio_snapshot_id,"
-                " previous_close_nav, current_close_nav, daily_return, cumulative_return,"
-                " transaction_cost, turnover, drawdown, calculated_at, created_at)"
-                " VALUES (%s,%s,3,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                (TEAM_ID, EXEC_DAY_ID, dp["previous_close_nav"], dp["current_close_nav"],
-                 dp["daily_return"], dp["cumulative_return"], dp["transaction_cost"], dp["turnover"],
-                 dp["drawdown"], NOW, NOW))
+    conn.execute("INSERT INTO observations (id, team_id, trading_day_id, close_portfolio_snapshot_id,"
+                 " payload_json, payload_hash, generated_at, published_at, created_at)"
+                 " VALUES (1,%s,%s,%s,%s,%s,%s,%s,%s)",
+                 (TEAM_ID, SIGNAL_DAY_ID, prior_snap_id, json.dumps(payload), _hash(payload),
+                  NOW, NOW, NOW))
+    raw = {"type": "decision_response", "target_weights": {str(k): v for k, v in DECISION.items()}}
+    conn.execute(
+        "INSERT INTO decision_submissions (id, team_id, observation_id, signal_day_id,"
+        " execution_day_id, idempotency_key, received_at, raw_payload_json, payload_hash, source,"
+        " status, validator_version, validation_policy_json, expected_weight_count,"
+        " stored_weight_count, sanitized_gross_weight, weights_processed_at, agent_version,"
+        " created_at, updated_at)"
+        " VALUES (%s,%s,1,%s,%s,%s,%s,%s,%s,'PARTICIPANT','QUEUED',%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        (SUBMISSION_ID, TEAM_ID, SIGNAL_DAY_ID, EXEC_DAY_ID, "idem-1", NOW, json.dumps(raw),
+         _hash(raw), "reject-not-repair-1.0", json.dumps(CONSTRAINTS), len(ACTIVE), len(ACTIVE),
+         Decimal("0.25"), NOW, "alpha-3.1", NOW, NOW))
 
 
 def run(dsn: str, schema_sql: str) -> None:
     import psycopg
-    with psycopg.connect(dsn, autocommit=False) as conn:
-        with conn.cursor() as cur:
-            cur.execute(schema_sql)
-            seed_static(cur)
-            # --- drive the engine: the after-close batch for 2026-09-02 ---
-            rec = engine.execute_decision(PRIOR, DECISION, OPEN_PX, CLOSE_PX, ACTIVE, CONSTRAINTS,
-                                          prev_close_nav=INITIAL, initial_capital=INITIAL)
-            assert rec["execution"]["nav_open"] == Decimal("1005600.000000000000"), \
-                f'nav_open {rec["execution"]["nav_open"]} != his documented 1,005,600'
-            rows = db_adapter.day_rows(rec, team_code="team_alpha", signal_date=SIGNAL_DATE,
-                                       execution_date=EXEC_DATE, active_instruments=ACTIVE,
-                                       idempotency_key="idem-1", received_at="2026-09-02T13:00:00Z",
-                                       initial_capital=INITIAL, agent_version="alpha-3.1")
-            persist_day(cur, rec, rows)
-        conn.commit()
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(schema_sql)
+        seed_platform(conn)
 
-        # --- read the trajectory BACK from Postgres and reconstruct it ---
-        with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM transactions WHERE execution_id=1")
-            n_tx = cur.fetchone()[0]
-            cur.execute("SELECT nav, cash FROM portfolio_snapshots WHERE team_id=1 AND trading_day_id=2"
-                        " AND snapshot_type='CLOSE'")
-            db_nav, db_cash = cur.fetchone()
-            cur.execute("SELECT COALESCE(sum(market_value),0) FROM position_snapshots ps"
-                        " JOIN portfolio_snapshots s ON s.id=ps.portfolio_snapshot_id"
-                        " WHERE s.team_id=1 AND s.trading_day_id=2 AND s.snapshot_type='CLOSE'")
-            db_pos = cur.fetchone()[0]
-            cur.execute("SELECT current_close_nav, daily_return, transaction_cost, turnover"
-                        " FROM daily_performance WHERE team_id=1 AND trading_day_id=2")
-            perf_nav, perf_ret, perf_cost, perf_turn = cur.fetchone()
-            cur.execute("SELECT balance_after FROM cash_ledger WHERE team_id=1 AND trading_day_id=2"
-                        " ORDER BY id DESC LIMIT 1")
-            ledger_end = cur.fetchone()[0]
+        repo = TradingRepository(conn)
+        # 2) reconstruct the engine state from the DB (the last CLOSE)
+        prior = repo.load_state(TEAM_ID, initial_capital=INITIAL)
+        assert prior["state"]["cash"] == Decimal("400000"), prior["state"]["cash"]
+        assert prior["state"]["shares"] == {AAPL: Decimal("2000"), MSFT: Decimal("800")}, prior["state"]["shares"]
+        assert prior["prev_close_nav"] == Decimal("1000000")
 
-    # reconstruction checks: DB rows reproduce the engine record exactly (12-dp Decimal)
+        # 3) the after-close batch, id-first
+        rec = engine.execute_decision(prior["state"], DECISION, OPEN_PX, CLOSE_PX, ACTIVE,
+                                      CONSTRAINTS, prev_close_nav=prior["prev_close_nav"],
+                                      initial_capital=INITIAL)
+        assert rec["execution"]["nav_open"] == Decimal("1005600.000000000000"), rec["execution"]["nav_open"]
+
+        # 4) persist the whole trajectory atomically
+        ids = repo.persist_day(team_id=TEAM_ID, execution_day_id=EXEC_DAY_ID,
+                               submission_id=SUBMISSION_ID, record=rec, initial_capital=INITIAL)
+
+        # 5) read the trajectory BACK and reconstruct it
+        n_tx = conn.execute("SELECT count(*) FROM transactions WHERE execution_id = %s",
+                            (ids["execution_id"],)).fetchone()[0]
+        db_nav, db_cash = conn.execute(
+            "SELECT nav, cash FROM portfolio_snapshots WHERE id = %s",
+            (ids["close_snapshot_id"],)).fetchone()
+        db_pos = conn.execute(
+            "SELECT COALESCE(sum(market_value), 0) FROM position_snapshots WHERE portfolio_snapshot_id = %s",
+            (ids["close_snapshot_id"],)).fetchone()[0]
+        perf_nav, perf_cost, perf_turn = conn.execute(
+            "SELECT current_close_nav, transaction_cost, turnover FROM daily_performance"
+            " WHERE team_id = %s AND trading_day_id = %s", (TEAM_ID, EXEC_DAY_ID)).fetchone()
+        ledger_end = conn.execute(
+            "SELECT balance_after FROM cash_ledger WHERE execution_id = %s ORDER BY id DESC LIMIT 1",
+            (ids["execution_id"],)).fetchone()[0]
+        # the repo can also reconstruct the state for the NEXT day
+        nxt = repo.load_state(TEAM_ID, initial_capital=INITIAL)
+
     assert n_tx == len(rec["transactions"]) == 3, n_tx
     assert db_nav == rec["nav_close"], (db_nav, rec["nav_close"])
-    assert db_cash + db_pos == db_nav, (db_cash, db_pos, db_nav)          # NAV rebuilt from positions
+    assert db_cash + db_pos == db_nav, (db_cash, db_pos, db_nav)
     assert perf_nav == rec["nav_close"]
     assert perf_cost == rec["execution"]["total_fee"]
     assert perf_turn == rec["performance"]["turnover"]
-    assert ledger_end == rec["execution"]["cash_after"]                  # cash ledger reconciles
-    print("PASS: engine record round-tripped through PostgreSQL and reconstructed exactly")
-    print(f"  nav_open (his doc 1,005,600) : {rec['execution']['nav_open']}")
-    print(f"  transactions persisted       : {n_tx}")
-    print(f"  CLOSE NAV (DB == engine)     : {db_nav}")
-    print(f"  NAV rebuilt from positions   : {db_cash} cash + {db_pos} positions = {db_cash + db_pos}")
-    print(f"  daily_performance turnover   : {perf_turn}   cost: {perf_cost}")
-    print(f"  cash_ledger end == cash_after: {ledger_end}")
+    assert ledger_end == rec["execution"]["cash_after"]
+    assert nxt["prev_close_nav"] == rec["nav_close"]             # next day resumes from this close
+    assert nxt["state"]["cash"] == rec["new_state"]["cash"]
+    print("PASS: TradingRepository load -> execute -> persist -> reconstruct, on the real schema")
+    print(f"  load_state -> nav_open (his doc 1,005,600) : {rec['execution']['nav_open']}")
+    print(f"  transactions persisted                     : {n_tx}")
+    print(f"  CLOSE NAV (DB == engine)                   : {db_nav}")
+    print(f"  NAV rebuilt from positions                 : {db_cash} + {db_pos} = {db_cash + db_pos}")
+    print(f"  daily_performance turnover / cost          : {perf_turn} / {perf_cost}")
+    print(f"  cash_ledger end == cash_after              : {ledger_end}")
+    print(f"  next-day load_state cash / prev_nav        : {nxt['state']['cash']} / {nxt['prev_close_nav']}")
 
 
 def _skip_or_run():
