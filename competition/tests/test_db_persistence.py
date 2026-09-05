@@ -98,6 +98,18 @@ def test_validate_decision_rejects_over_cap():
     assert not v["ok"] and v["accepted"] is None and v["violations"]
 
 
+def test_infeasible_full_allocation_is_held_not_negative_cash():
+    """A valid vector summing to 1.0 from all cash can't cover the fee -> HOLD (no trade), cash
+    stays non-negative, and it does NOT count as a violation (empty violations)."""
+    r = _record({"AAA": 0.4, "BBB": 0.4, "CCC": 0.2})              # sum 1.0, each <= 0.50 cap -> valid
+    assert r["executed"] is False                                 # fill rejected at execution
+    assert r["violations"] == []                                  # infeasible hold != M9 violation
+    assert r["transactions"] == []
+    assert r["new_state"]["shares"] == {}                         # holdings unchanged (still flat)
+    assert r["new_state"]["cash"] == Decimal("1000000.000000000000")   # never negative
+    assert r["execution"]["cash_after"] >= 0
+
+
 def test_reject_not_repair_leaves_no_trade_and_no_weight_rows():
     r = _record({"AAA": 0.9})                                   # rejected inline
     assert r["executed"] is False and r["violations"]

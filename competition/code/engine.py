@@ -201,7 +201,15 @@ def settle_open(state: dict[str, Any], target_weights: Any, open_prices: dict[st
         fee = traded * fee_rate
         invested = sum((sh * px[t] for t, sh in new_shares.items() if t in px), _D(0))
         cash_after = nav_open - invested - fee
-        new_shares = {t: sh for t, sh in new_shares.items() if abs(sh) > _D("1e-12")}
+        if cash_after < 0:
+            # Infeasible: the fill would overdraw cash (a fully-invested book can't cover the fee).
+            # Reject the whole fill and HOLD - reject-not-repair, so weights are never rescaled. This
+            # is an EXECUTION-time check (the fee depends on turnover, unknown at receipt). It leaves
+            # `violations` empty, so it does NOT count toward M9; it just holds like a no-trade day.
+            weights, traded, fee, cash_after = None, _D(0), _D(0), cash_before
+            new_shares = dict(shares)
+        else:
+            new_shares = {t: sh for t, sh in new_shares.items() if abs(sh) > _D("1e-12")}
 
     # Per-instrument trades (shares_before -> new_shares); fee split pro-rata by notional so the
     # individual fees reconcile to the total, and the cash_change values sum to the cash delta.
