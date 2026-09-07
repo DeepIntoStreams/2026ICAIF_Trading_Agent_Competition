@@ -11,7 +11,6 @@ from pathlib import Path
 
 import psycopg
 
-from data.database.init_db import initialize
 from deployment.bootstrap.common import (
     DEFAULT_CONFIG,
     load_config,
@@ -20,6 +19,8 @@ from deployment.bootstrap.common import (
 )
 from deployment.live_server.calendar_service import ensure_trading_days, latest_closed_session
 from deployment.live_server.market_data import import_market_day
+from deployment.live_server.migration_runner import apply_migrations
+from deployment.live_server.schema_init import initialize_base_if_needed
 from deployment.live_server.store import CompetitionStore, now_utc
 
 
@@ -75,7 +76,8 @@ def main() -> int:
             f"cannot fetch an unclosed session; latest closed XNYS session is {latest_closed}"
         )
 
-    initialize(args.database_url)
+    initialize_base_if_needed(args.database_url)
+    applied_migrations = apply_migrations(args.database_url)
     active_count = upsert_instruments(args.database_url, config["instruments"])
     if active_count != len(config["instruments"]):
         raise RuntimeError(
@@ -101,6 +103,7 @@ def main() -> int:
         "calendar_end": end.isoformat(),
         "signal_sessions": [item.isoformat() for item in sessions],
         "market_bars_imported": imported,
+        "deployment_migrations_applied": applied_migrations,
     }
     record = write_run_record("database_init", summary)
     print(json.dumps({**summary, "run_record": str(record)}, indent=2, sort_keys=True))

@@ -43,12 +43,51 @@ completed day returns `state=already_completed` without charging fees twice. A
 production scheduler (CronJob, systemd timer, or equivalent) should invoke this
 command after the provider's end-of-day data is complete.
 
+## Database migrations
+
+Deployment owns additive database migrations under `deployment/live_server/migrations`.
+Do not edit an already-applied migration: the runner records and verifies its SHA-256.
+The Compose `schema-init` service creates the teammate-owned base schema only when the database
+is empty, then applies all pending Deployment migrations. Existing databases never replay the
+base schema over migrated views. The organizer bootstrap command follows the same sequence.
+
+For an existing database, stop the daily scheduler at a completed-day boundary, take a
+PostgreSQL backup, and run:
+
+```bash
+python -m deployment.live_server.schema_init
+python -m deployment.bootstrap.verify_setup
+```
+
+Migration `0001_prior_close_snapshot` adds
+`portfolio_snapshots.prior_close_snapshot_id`, backfills execution snapshots from the
+authoritative `execution -> submission -> observation -> CLOSE snapshot` relationship,
+and links legacy bootstrap snapshots to their immediately preceding account state. It
+fails rather than guessing if any non-initial snapshot cannot be linked or violates the
+team/type/time ordering invariants.
+
+`INITIAL` snapshots have a null predecessor. Every `POST_OPEN` and `CLOSE` snapshot has
+the same predecessor selected by its execution's source observation. A database trigger
+fills this Deployment-owned column for new rows, so the Competition persistence package
+does not need to know about the added column.
+
+Application rollout order:
+
+1. Pause the daily scheduler and back up PostgreSQL.
+2. Deploy and run `deployment.live_server.schema_init`.
+3. Require `verify_setup` to report `deployment_migrations_current=true` and
+   `snapshot_lineage_valid=true`.
+4. Deploy/restart the live server and resume the scheduler.
+
+Rollback is restore-from-backup. Do not drop the column after new snapshots have used it;
+that would discard production lineage rather than perform a safe application rollback.
+
 ## Run
 
 ```bash
 export COMPETITION_DATABASE_URL='postgresql://competition:competition@127.0.0.1:5432/competition'
 export COMPETITION_ADMIN_TOKEN='<high-entropy organizer token>'
-python data/database/init_db.py
+python -m deployment.live_server.schema_init
 python -m deployment.live_server.app
 ```
 

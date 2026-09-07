@@ -20,7 +20,7 @@ services:
     build:
       context: ..
       dockerfile: deployment/live_server/Dockerfile
-    command: ["python", "data/database/init_db.py"]
+    command: ["python", "-m", "deployment.live_server.schema_init"]
     environment:
       COMPETITION_DATABASE_URL: postgresql://${POSTGRES_USER:-competition}:${POSTGRES_PASSWORD:-competition}@postgres:5432/${POSTGRES_DB:-competition}
     depends_on:

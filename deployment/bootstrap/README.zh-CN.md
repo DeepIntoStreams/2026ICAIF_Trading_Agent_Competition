@@ -7,6 +7,7 @@
 - `init_database.py`：应用 PostgreSQL schema、同步 30 只股票、按 XNYS 官方日历创建交易日；可选择回填行情。
 - `verify_setup.py`：检查股票池、交易日以及已导入行情是否完整。
 - `bootstrap_config.json`：正式股票池、交易日历、初始资金和交易约束配置。
+- `deployment/live_server/migrations/`：Deployment 自主管理的版本化生产数据库迁移。
 - `run_records/`：每次运行的无密码 JSON 记录；默认不提交生成文件。
 
 ## 推荐顺序
@@ -19,6 +20,9 @@ python -m deployment.bootstrap.init_database --fetch-market-data
 
 python -m deployment.bootstrap.verify_setup
 ```
+
+`init_database` 会先应用基础 schema，再按文件名顺序应用尚未执行的 Deployment migration；
+已执行 migration 的 SHA-256 不一致时会立即失败，禁止静默修改历史 migration。
 
 需要固定日期、用于重放或换机器时，显式写日期以避免结果随当天变化：
 

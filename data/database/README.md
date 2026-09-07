@@ -321,6 +321,12 @@ snapshot types are:
 - `POST_OPEN`: after the simulated open execution;
 - `CLOSE`: after close-price valuation.
 
+`portfolio_snapshots.prior_close_snapshot_id` is the explicit account-state
+predecessor. `INITIAL` snapshots have no predecessor. Every `POST_OPEN` and
+`CLOSE` snapshot points to the exact `INITIAL`/`CLOSE` snapshot referenced by
+the executed decision's source observation. Consumers must follow this link
+instead of selecting the latest CLOSE snapshot by date or id.
+
 ### `daily_performance`
 
 One summary row per team and trading day. It is derived after the close snapshot

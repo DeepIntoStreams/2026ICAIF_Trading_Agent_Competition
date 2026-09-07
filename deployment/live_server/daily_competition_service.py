@@ -102,7 +102,7 @@ class DailyCompetitionService:
         for raw_team_id, raw_team_code in teams:
             team_id, team_code = int(raw_team_id), str(raw_team_code)
             prior_observation = connection.execute(
-                """SELECT id, payload_json FROM observations
+                """SELECT id, payload_json, close_portfolio_snapshot_id FROM observations
                     WHERE team_id=%s AND trading_day_id=%s AND published_at IS NOT NULL""",
                 (team_id, signal_day_id),
             ).fetchone()
@@ -111,6 +111,7 @@ class DailyCompetitionService:
                     f"team {team_code} has no published observation for {signal_date}"
                 )
             observation_id, prior_payload = int(prior_observation[0]), prior_observation[1]
+            prior_close_snapshot_id = int(prior_observation[2])
             frozen_constraints = dict(prior_payload.get("constraints") or constraints)
             prepared = self.submissions.prepare(
                 connection, team_id=team_id, team_code=team_code,
@@ -122,6 +123,7 @@ class DailyCompetitionService:
                 team_id=team_id,
                 submission_id=prepared.submission_id,
                 execution_day_id=day_id,
+                prior_close_snapshot_id=prior_close_snapshot_id,
                 instrument_ids=instrument_ids,
                 ticker_by_id=ticker_by_id,
                 target_weights=prepared.target_weights,
