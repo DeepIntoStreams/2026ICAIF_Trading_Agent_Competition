@@ -13,10 +13,12 @@ from .agent import Agent
 
 
 class CompetitionClient:
-    def __init__(self, base_url: str, api_key: str, timeout: float = 30.0):
+    def __init__(self, base_url: str, api_key: str, timeout: float = 30.0,
+                 run_id: str = "official_2026"):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        self.run_id = run_id
 
     def request(self, method: str, path: str, body: dict | None = None,
                 idempotency_key: str | None = None) -> dict:
@@ -60,7 +62,7 @@ def run_once(client: CompetitionClient, agent: Agent) -> dict:
     decision = {
         "type": "decision_response",
         "protocol_version": "0.1",
-        "run_id": "current",
+        "run_id": client.run_id,
         "session_date": observation["session_date"],
         "target_weights": agent.decide(observation),
         "metadata": {"agent_version": agent.agent_version},
@@ -73,13 +75,16 @@ def main() -> int:
     parser.add_argument("--base-url", default=os.environ.get("COMPETITION_BASE_URL",
                                                              "http://127.0.0.1:8080"))
     parser.add_argument("--api-key", default=os.environ.get("COMPETITION_API_KEY"))
+    parser.add_argument("--run-id", default=os.environ.get("COMPETITION_RUN_ID",
+                                                           "official_2026"))
     args = parser.parse_args()
     if not args.api_key:
         raise SystemExit("set COMPETITION_API_KEY or pass --api-key")
-    print(json.dumps(run_once(CompetitionClient(args.base_url, args.api_key), Agent()), indent=2))
+    print(json.dumps(run_once(
+        CompetitionClient(args.base_url, args.api_key, run_id=args.run_id), Agent()
+    ), indent=2))
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -90,7 +90,7 @@ class DailyCompetitionService:
         constraints = dict(config["constraints"])
         initial_capital = Decimal(str(config["initial_capital_usd"]))
         panel = self.observations.shared_panel(
-            instruments, trading_date, deadline, constraints,
+            connection, instruments, trading_date, deadline, constraints,
         )
         instrument_ids = [int(row[0]) for row in instruments]
         ticker_by_id = {int(row[0]): str(row[1]) for row in instruments}

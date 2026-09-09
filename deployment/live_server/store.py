@@ -6,7 +6,7 @@ import hashlib
 import json
 import secrets
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import psycopg
@@ -26,13 +26,35 @@ def canonical_json(document: dict[str, Any]) -> str:
 class CompetitionStore:
     """Synchronous repository/service boundary used by FastAPI and the admin CLI."""
 
-    def __init__(self, database_url: str):
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        connect_timeout_seconds: int = 0,
+        statement_timeout_ms: int = 0,
+        lock_timeout_ms: int = 0,
+    ):
         if not database_url.startswith(("postgresql://", "postgres://")):
             raise ValueError("a PostgreSQL COMPETITION_DATABASE_URL is required")
+        if min(connect_timeout_seconds, statement_timeout_ms, lock_timeout_ms) < 0:
+            raise ValueError("database timeout settings must not be negative")
         self.database_url = database_url
+        self.connect_timeout_seconds = connect_timeout_seconds
+        self.statement_timeout_ms = statement_timeout_ms
+        self.lock_timeout_ms = lock_timeout_ms
 
     def _connect(self):
-        return psycopg.connect(self.database_url, row_factory=dict_row)
+        kwargs: dict[str, Any] = {"row_factory": dict_row}
+        if self.connect_timeout_seconds:
+            kwargs["connect_timeout"] = self.connect_timeout_seconds
+        options = []
+        if self.statement_timeout_ms:
+            options.append(f"-c statement_timeout={self.statement_timeout_ms}")
+        if self.lock_timeout_ms:
+            options.append(f"-c lock_timeout={self.lock_timeout_ms}")
+        if options:
+            kwargs["options"] = " ".join(options)
+        return psycopg.connect(self.database_url, **kwargs)
 
     @staticmethod
     def _hash_api_key(token: str) -> str:
@@ -65,6 +87,12 @@ class CompetitionStore:
                 (team_code, display_name or team_code, self._hash_api_key(token),
                  timestamp, timestamp),
             ).fetchone()
+            connection.execute(
+                """INSERT INTO team_api_credentials
+                       (team_id, key_hash, status, issued_at, created_at)
+                   VALUES (%s, %s, 'ACTIVE', %s, %s)""",
+                (row["id"], self._hash_api_key(token), timestamp, timestamp),
+            )
             self._audit(connection, row["id"], None, "ADMIN", "organizer",
                         "TEAM_CREATED", "team", row["id"], None,
                         {"team_code": team_code})
@@ -76,12 +104,133 @@ class CompetitionStore:
         digest = self._hash_api_key(token)
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT team_code, api_key_hash FROM teams "
-                "WHERE api_key_hash=%s AND status='ACTIVE'", (digest,),
+                """SELECT t.team_code, credential.key_hash
+                     FROM team_api_credentials credential
+                     JOIN teams t ON t.id=credential.team_id
+                    WHERE credential.key_hash=%s
+                      AND credential.status='ACTIVE'
+                      AND (credential.expires_at IS NULL OR credential.expires_at>%s)
+                      AND t.status='ACTIVE'""",
+                (digest, now_utc()),
             ).fetchone()
-        if not row or not secrets.compare_digest(row["api_key_hash"], digest):
+        if not row or not secrets.compare_digest(row["key_hash"], digest):
             return None
         return str(row["team_code"])
+
+    def rotate_team_api_key(
+        self,
+        team_code: str,
+        *,
+        grace_seconds: int = 0,
+        token: str | None = None,
+    ) -> dict[str, Any]:
+        if not 0 <= grace_seconds <= 3_600:
+            raise ValueError("grace_seconds must be between 0 and 3600")
+        token = token or secrets.token_urlsafe(32)
+        digest = self._hash_api_key(token)
+        timestamp = now_utc()
+        expires_at = timestamp + timedelta(seconds=grace_seconds)
+        with self._connect() as connection:
+            team = self._team(connection, team_code, lock=True)
+            if not team:
+                raise KeyError(team_code)
+            previous_credentials = connection.execute(
+                """SELECT id FROM team_api_credentials
+                    WHERE team_id=%s AND status='ACTIVE'
+                      AND (expires_at IS NULL OR expires_at>%s)
+                    ORDER BY id""",
+                (team["id"], timestamp),
+            ).fetchall()
+            previous_credential_ids = [int(row["id"]) for row in previous_credentials]
+            if grace_seconds:
+                connection.execute(
+                    """UPDATE team_api_credentials
+                          SET expires_at=CASE
+                              WHEN expires_at IS NULL OR expires_at>%s THEN %s
+                              ELSE expires_at END
+                        WHERE team_id=%s AND status='ACTIVE'""",
+                    (expires_at, expires_at, team["id"]),
+                )
+            else:
+                connection.execute(
+                    """UPDATE team_api_credentials
+                          SET status='REVOKED', revoked_at=%s
+                        WHERE team_id=%s AND status='ACTIVE'""",
+                    (timestamp, team["id"]),
+                )
+            credential = connection.execute(
+                """INSERT INTO team_api_credentials
+                       (team_id, key_hash, status, issued_at, created_at)
+                   VALUES (%s,%s,'ACTIVE',%s,%s)
+                   RETURNING id""",
+                (team["id"], digest, timestamp, timestamp),
+            ).fetchone()
+            # Keep the legacy column synchronized while existing deployments
+            # transition to the credential table.
+            connection.execute(
+                "UPDATE teams SET api_key_hash=%s, updated_at=%s WHERE id=%s",
+                (digest, timestamp, team["id"]),
+            )
+            self._audit(
+                connection,
+                team["id"],
+                None,
+                "ADMIN",
+                "organizer",
+                "TEAM_API_KEY_ROTATED",
+                "team_api_credential",
+                credential["id"],
+                None,
+                {"grace_seconds": grace_seconds},
+            )
+        return {
+            "team_id": team_code,
+            "credential_id": int(credential["id"]),
+            "api_key": token,
+            "issued_at": timestamp.isoformat(),
+            "previous_credential_ids": previous_credential_ids,
+            "old_keys_valid_until": expires_at.isoformat() if grace_seconds else None,
+        }
+
+    def revoke_team_api_key(self, team_code: str, credential_id: int) -> dict[str, Any]:
+        timestamp = now_utc()
+        with self._connect() as connection:
+            team = self._team(connection, team_code, lock=True)
+            if not team:
+                raise KeyError(team_code)
+            credential = connection.execute(
+                """SELECT id, status FROM team_api_credentials
+                    WHERE id=%s AND team_id=%s FOR UPDATE""",
+                (credential_id, team["id"]),
+            ).fetchone()
+            if not credential:
+                raise KeyError(credential_id)
+            idempotent = credential["status"] == "REVOKED"
+            if not idempotent:
+                connection.execute(
+                    """UPDATE team_api_credentials
+                          SET status='REVOKED', revoked_at=%s
+                        WHERE id=%s""",
+                    (timestamp, credential_id),
+                )
+                self._audit(
+                    connection,
+                    team["id"],
+                    None,
+                    "ADMIN",
+                    "organizer",
+                    "TEAM_API_KEY_REVOKED",
+                    "team_api_credential",
+                    credential_id,
+                    None,
+                    {},
+                )
+        return {
+            "team_id": team_code,
+            "credential_id": credential_id,
+            "revoked": True,
+            "idempotent": idempotent,
+        }
 
     def create_trading_day(self, trading_date: date, market_open_at: datetime,
                            market_close_at: datetime, submission_open_at: datetime,
@@ -235,7 +384,7 @@ class CompetitionStore:
                 ).fetchone()
             attempt_id = self._insert_attempt(
                 connection, team["id"], day["id"] if day else None, request_id,
-                idempotency_key, received_at, document, payload_hash,
+                idempotency_key, received_at, _safe_audit_document(document), payload_hash,
                 "INVALID_REQUEST", reason,
                 {"hash_kind": "raw_body_sha256"} if payload_hash else {},
             )
@@ -384,3 +533,15 @@ class CompetitionStore:
 
 
 LiveStore = CompetitionStore
+
+
+def _safe_audit_document(document: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return only JSON that canonical serialization proves safe for JSONB."""
+
+    if document is None:
+        return None
+    try:
+        canonical_json(document)
+    except (OverflowError, RecursionError, TypeError, ValueError):
+        return None
+    return document

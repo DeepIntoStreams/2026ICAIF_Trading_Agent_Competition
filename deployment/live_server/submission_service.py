@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -90,7 +90,18 @@ class SubmissionService:
         )
         accepted = verdict["accepted"] or {}
         violations = list(verdict["violations"])
+        typed_raw_weights = {
+            ticker: _decimal_or_none(value) for ticker, value in raw_weights.items()
+        }
+        if any(value is None for value in typed_raw_weights.values()):
+            if "raw_weight_out_of_storage_range" not in violations:
+                violations.append("raw_weight_out_of_storage_range")
+            # Preserve the source JSON, but never let an unrepresentable typed
+            # value turn one participant rejection into a whole-day DB failure.
+            accepted = {}
         status = "QUEUED" if verdict["ok"] else "REJECTED"
+        if "raw_weight_out_of_storage_range" in violations:
+            status = "REJECTED"
         timestamp = _now()
         for instrument_id, ticker, *_ in instruments:
             provided = ticker in raw_weights
@@ -100,7 +111,7 @@ class SubmissionService:
                         sanitized_weight, validation_codes_json, created_at)
                    VALUES (%s,%s,%s,%s,%s,%s,%s)""",
                 (submission_id, instrument_id, provided,
-                 _decimal_or_none(raw_weights.get(ticker)) if provided else None,
+                 typed_raw_weights.get(ticker) if provided else None,
                  Decimal(str(accepted.get(ticker, 0))),
                  Jsonb(violations if provided and violations else []), timestamp),
             )
@@ -189,9 +200,25 @@ class SubmissionService:
 
 def _decimal_or_none(value: Any) -> Decimal | None:
     try:
-        return Decimal(str(value))
+        converted = Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
         return None
+    if not converted.is_finite():
+        return None
+    try:
+        digits = len(converted.as_tuple().digits)
+        exponent = abs(converted.as_tuple().exponent)
+        with localcontext() as context:
+            context.prec = max(50, digits + exponent + 2)
+            stored = converted.quantize(
+                Decimal("0.000000000001"), rounding=ROUND_HALF_UP
+            )
+    except InvalidOperation:
+        return None
+    # NUMERIC(28,12) leaves sixteen digits to the left of the decimal point.
+    if abs(stored) >= Decimal("10000000000000000"):
+        return None
+    return stored
 
 
 def _now() -> datetime:
