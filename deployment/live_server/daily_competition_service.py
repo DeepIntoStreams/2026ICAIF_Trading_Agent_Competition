@@ -38,20 +38,21 @@ class DailyCompetitionService:
     def _process(self, connection: Any, trading_date: date,
                  config: dict[str, Any]) -> dict[str, Any]:
         day = connection.execute(
-            """SELECT id, submission_deadline_at, market_status, execution_status,
-                      valuation_status, observation_status
+            """SELECT id, market_open_at, market_close_at, submission_deadline_at,
+                      market_status, execution_status, valuation_status, observation_status
                  FROM trading_days WHERE trading_date=%s FOR UPDATE""",
             (trading_date,),
         ).fetchone()
         if day is None:
             raise RuntimeError(f"trading day {trading_date} is not provisioned")
-        day_id, deadline = int(day[0]), day[1]
-        if day[2] != "DATA_IMPORTED":
+        day_id = int(day[0])
+        market_open_at, market_close_at, deadline = day[1], day[2], day[3]
+        if day[4] != "DATA_IMPORTED":
             raise RuntimeError(f"market data for {trading_date} is not complete")
-        if day[3:] == ("COMPLETED", "COMPLETED", "PUBLISHED"):
+        if day[5:] == ("COMPLETED", "COMPLETED", "PUBLISHED"):
             return self._completed_summary(connection, day_id, trading_date)
-        if deadline is None:
-            raise RuntimeError(f"submission deadline for {trading_date} is not configured")
+        if market_open_at is None or market_close_at is None or deadline is None:
+            raise RuntimeError(f"market times for {trading_date} are not configured")
 
         signal = connection.execute(
             """SELECT id, trading_date FROM trading_days
@@ -98,6 +99,7 @@ class DailyCompetitionService:
         close_prices = {int(row[0]): row[9] for row in instruments}
 
         self._set_processing(connection, day_id)
+        processed_at = _now()
         counts = {"teams": 0, "executed": 0, "rejected": 0, "fallback": 0}
         for raw_team_id, raw_team_code in teams:
             team_id, team_code = int(raw_team_id), str(raw_team_code)
@@ -124,6 +126,9 @@ class DailyCompetitionService:
                 submission_id=prepared.submission_id,
                 execution_day_id=day_id,
                 prior_close_snapshot_id=prior_close_snapshot_id,
+                market_open_at=market_open_at,
+                market_close_at=market_close_at,
+                processed_at=processed_at,
                 instrument_ids=instrument_ids,
                 ticker_by_id=ticker_by_id,
                 target_weights=prepared.target_weights,
@@ -156,6 +161,12 @@ class DailyCompetitionService:
             counts["rejected"] += int(prepared.status == "REJECTED")
             counts["fallback"] += int(prepared.source == "FALLBACK")
 
+        leaderboard = self.adapter.compute_leaderboard(
+            connection,
+            trading_day_id=day_id,
+            initial_capital=initial_capital,
+            calculated_at=processed_at,
+        )
         connection.execute(
             """UPDATE trading_days
                   SET execution_status='COMPLETED', valuation_status='COMPLETED',
@@ -163,6 +174,7 @@ class DailyCompetitionService:
                 WHERE id=%s""",
             (_now(), day_id),
         )
+        counts["leaderboard_entries"] = len(leaderboard)
         self._audit(connection, None, day_id, "DAILY_LIVE_COMPLETED",
                     "trading_day", day_id, counts)
         return {
@@ -174,6 +186,7 @@ class DailyCompetitionService:
             "decisions_rejected": counts["rejected"],
             "fallback_decisions": counts["fallback"],
             "observations_published": counts["teams"],
+            "leaderboard_entries": counts["leaderboard_entries"],
         }
 
     @staticmethod
@@ -215,9 +228,14 @@ class DailyCompetitionService:
             "SELECT count(*) FROM observations WHERE trading_day_id=%s AND published_at IS NOT NULL",
             (day_id,),
         ).fetchone()[0]
+        leaderboard_entries = connection.execute(
+            "SELECT count(*) FROM leaderboard WHERE trading_day_id=%s",
+            (day_id,),
+        ).fetchone()[0]
         return {"state": "already_completed", "trading_date": trading_date.isoformat(),
                 "teams_processed": int(executions),
-                "observations_published": int(observations)}
+                "observations_published": int(observations),
+                "leaderboard_entries": int(leaderboard_entries)}
 
     @staticmethod
     def _audit(connection: Any, team_id: int | None, day_id: int,

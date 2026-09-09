@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from competition.code.engine import advance_day, validate_decision
-from competition.code.trading_repo import TradingRepository
+from competition.code.trading_repo import (
+    TradingRepository,
+    compute_and_store_leaderboard,
+)
 
 
 @dataclass(frozen=True)
@@ -16,6 +20,9 @@ class TeamDayInput:
     submission_id: int
     execution_day_id: int
     prior_close_snapshot_id: int
+    market_open_at: datetime
+    market_close_at: datetime
+    processed_at: datetime
     instrument_ids: list[int]
     ticker_by_id: dict[int, str]
     target_weights: dict[int, Decimal] | None
@@ -45,11 +52,11 @@ class CompetitionAdapter:
     @staticmethod
     def execute(connection: Any, value: TeamDayInput) -> TeamDayOutput:
         repository = TradingRepository(connection)
-        prior = CompetitionAdapter._load_prior_state(
-            connection,
-            team_id=value.team_id,
-            execution_day_id=value.execution_day_id,
+        prior = repository.load_state(
+            value.team_id,
             prior_close_snapshot_id=value.prior_close_snapshot_id,
+            execution_day_id=value.execution_day_id,
+            initial_capital=value.initial_capital,
         )
         cycle = advance_day(
             prior["state"], value.target_weights,
@@ -67,7 +74,12 @@ class CompetitionAdapter:
             execution_day_id=value.execution_day_id,
             submission_id=value.submission_id,
             record=cycle["record"],
+            prior_close_snapshot_id=value.prior_close_snapshot_id,
             initial_capital=value.initial_capital,
+            scheduled_at=value.market_open_at,
+            open_effective_at=value.market_open_at,
+            close_effective_at=value.market_close_at,
+            processed_at=value.processed_at,
         )
         linked = connection.execute(
             """SELECT count(*) FROM portfolio_snapshots
@@ -91,58 +103,17 @@ class CompetitionAdapter:
         return TeamDayOutput(cycle["record"], observation, ids)
 
     @staticmethod
-    def _load_prior_state(
+    def compute_leaderboard(
         connection: Any,
         *,
-        team_id: int,
-        execution_day_id: int,
-        prior_close_snapshot_id: int,
-    ) -> dict[str, Any]:
-        """Rebuild engine state from the observation-selected snapshot, never latest state."""
-        row = connection.execute(
-            """SELECT prior.id, prior.cash, prior.nav, prior.snapshot_type,
-                      prior_day.trading_date, execution_day.trading_date
-                 FROM portfolio_snapshots prior
-                 LEFT JOIN trading_days prior_day ON prior_day.id=prior.trading_day_id
-                 JOIN trading_days execution_day ON execution_day.id=%s
-                WHERE prior.id=%s AND prior.team_id=%s""",
-            (execution_day_id, prior_close_snapshot_id, team_id),
-        ).fetchone()
-        if row is None:
-            raise RuntimeError(
-                f"prior snapshot {prior_close_snapshot_id} does not belong to team {team_id}"
-            )
-        snapshot_id, cash, nav, snapshot_type, prior_date, execution_date = row
-        if snapshot_type not in {"INITIAL", "CLOSE"}:
-            raise RuntimeError(
-                f"prior snapshot {snapshot_id} has invalid type {snapshot_type}"
-            )
-        if prior_date is None or prior_date >= execution_date:
-            raise RuntimeError(
-                f"prior snapshot {snapshot_id} is not before execution day {execution_date}"
-            )
-
-        positions = connection.execute(
-            """SELECT instrument_id, quantity FROM position_snapshots
-                WHERE portfolio_snapshot_id=%s""",
-            (snapshot_id,),
-        ).fetchall()
-        shares = {int(instrument_id): quantity for instrument_id, quantity in positions}
-        peak_nav = connection.execute(
-            """WITH RECURSIVE ancestors AS (
-                   SELECT id, nav, prior_close_snapshot_id
-                     FROM portfolio_snapshots WHERE id=%s
-                   UNION
-                   SELECT predecessor.id, predecessor.nav,
-                          predecessor.prior_close_snapshot_id
-                     FROM portfolio_snapshots predecessor
-                     JOIN ancestors child
-                       ON predecessor.id=child.prior_close_snapshot_id
-               ) SELECT max(nav) FROM ancestors""",
-            (snapshot_id,),
-        ).fetchone()[0]
-        return {
-            "state": {"cash": cash, "shares": shares, "peak_nav": peak_nav or nav},
-            "prev_close_nav": nav,
-            "prior_snapshot_id": int(snapshot_id),
-        }
+        trading_day_id: int,
+        initial_capital: Decimal,
+        calculated_at: datetime,
+    ) -> list[dict[str, Any]]:
+        """Delegate official ranking to the Competition-owned implementation."""
+        return compute_and_store_leaderboard(
+            connection,
+            trading_day_id,
+            initial_capital=initial_capital,
+            now=calculated_at,
+        )
