@@ -49,6 +49,55 @@ def upsert_instruments(database_url: str, instruments: list[dict]) -> int:
     return int(active_count)
 
 
+def initialize_database(
+    database_url: str,
+    *,
+    config_path: Path = DEFAULT_CONFIG,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    fetch_market_data: bool = False,
+) -> dict[str, object]:
+    """Apply the repeat-safe database bootstrap and return its manifest data."""
+    config = load_config(config_path)
+    latest_closed = latest_closed_session(calendar_name=config["calendar"])
+    start = start_date or monday_of_week(latest_closed)
+    end = end_date or latest_closed
+    if end < start:
+        raise ValueError("end_date must not be before start_date")
+    if fetch_market_data and end > latest_closed:
+        raise ValueError(
+            f"cannot fetch an unclosed session; latest closed XNYS session is {latest_closed}"
+        )
+
+    initialize(database_url)
+    active_count = upsert_instruments(database_url, config["instruments"])
+    if active_count != len(config["instruments"]):
+        raise RuntimeError(
+            f"database has {active_count} active instruments; config has "
+            f"{len(config['instruments'])}. Deactivate removed instruments explicitly."
+        )
+
+    store = CompetitionStore(database_url)
+    sessions = ensure_trading_days(
+        store, start, end, calendar_name=config["calendar"]
+    )
+    imported: dict[str, int] = {}
+    if fetch_market_data:
+        for session in sessions:
+            imported[session.isoformat()] = import_market_day(store, session)
+
+    return {
+        "database": safe_database_target(database_url),
+        "config_sha256": config["_config_sha256"],
+        "active_instruments": active_count,
+        "calendar": config["calendar"],
+        "calendar_start": start.isoformat(),
+        "calendar_end": end.isoformat(),
+        "signal_sessions": [item.isoformat() for item in sessions],
+        "market_bars_imported": imported,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database-url", default=os.environ.get("COMPETITION_DATABASE_URL"))
@@ -64,44 +113,16 @@ def main() -> int:
     if not args.database_url:
         raise SystemExit("COMPETITION_DATABASE_URL is required")
 
-    config = load_config(args.config)
-    latest_closed = latest_closed_session(calendar_name=config["calendar"])
-    start = args.start_date or monday_of_week(latest_closed)
-    end = args.end_date or latest_closed
-    if end < start:
-        raise SystemExit("--end-date must not be before --start-date")
-    if args.fetch_market_data and end > latest_closed:
-        raise SystemExit(
-            f"cannot fetch an unclosed session; latest closed XNYS session is {latest_closed}"
+    try:
+        summary = initialize_database(
+            args.database_url,
+            config_path=args.config,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            fetch_market_data=args.fetch_market_data,
         )
-
-    initialize(args.database_url)
-    active_count = upsert_instruments(args.database_url, config["instruments"])
-    if active_count != len(config["instruments"]):
-        raise RuntimeError(
-            f"database has {active_count} active instruments; config has "
-            f"{len(config['instruments'])}. Deactivate removed instruments explicitly."
-        )
-
-    store = CompetitionStore(args.database_url)
-    sessions = ensure_trading_days(
-        store, start, end, calendar_name=config["calendar"]
-    )
-    imported: dict[str, int] = {}
-    if args.fetch_market_data:
-        for session in sessions:
-            imported[session.isoformat()] = import_market_day(store, session)
-
-    summary = {
-        "database": safe_database_target(args.database_url),
-        "config_sha256": config["_config_sha256"],
-        "active_instruments": active_count,
-        "calendar": config["calendar"],
-        "calendar_start": start.isoformat(),
-        "calendar_end": end.isoformat(),
-        "signal_sessions": [item.isoformat() for item in sessions],
-        "market_bars_imported": imported,
-    }
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     record = write_run_record("database_init", summary)
     print(json.dumps({**summary, "run_record": str(record)}, indent=2, sort_keys=True))
     return 0

@@ -88,6 +88,7 @@ generated or has actually been made available to a team.
 
 ```text
 teams
+  └──< team_api_credentials
   +-- submission_attempts
   +-- observations
   +-- decision_submissions
@@ -117,8 +118,15 @@ application code does not need a sequence of per-row queries.
 
 ### `teams`
 
-One row per approved team. `api_key_hash` stores only a password hash/digest; the
-plaintext credential must never be stored or committed.
+One row per approved team. `api_key_hash` is retained as the current-key compatibility
+column while receiver authentication uses `team_api_credentials`; plaintext credentials
+must never be stored or committed.
+
+### `team_api_credentials`
+
+One row per issued team API key hash. Multiple active rows permit a short rotation grace
+period; `expires_at`, `status`, and `revoked_at` make expiry and revocation explicit and
+auditable. Newly generated plaintext keys are returned once by the organizer API.
 
 ### `instruments`
 
@@ -136,11 +144,19 @@ coordination data; changes are also written to `audit_logs`.
 One complete OHLCV record per instrument and trading day. The values used for
 execution and valuation are therefore reproducible from the database alone.
 
+### `market_bar_candidates`
+
+The immutable Yahoo/Massive/Twelve Data candidate rows checked
+before a consensus bar is accepted. `selected` identifies the agreeing quorum;
+disagreement rejects the entire market day before an official bar is committed.
+
 ### `fundamental_records`
 
 Point-in-time fundamental input records. `available_at` controls whether a record
 may appear in an observation. The original provider document is retained in
-`payload_json`.
+`payload_json`. `filing_id` preserves SEC amendments/restatements as distinct
+versions. For EDGAR data, `available_at` is the filing acceptance timestamp, not
+the reporting-period end date.
 
 No organizer-provided news table is present because news is not sent in the
 competition observation.

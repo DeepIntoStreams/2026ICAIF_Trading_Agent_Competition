@@ -51,7 +51,7 @@ psql "$COMPETITION_DATABASE_URL" -c '\dt'
 psql "$COMPETITION_DATABASE_URL" -c '\dv'
 ```
 
-Expected result: 16 application tables and 3 convenience views.
+Expected result: 20 application tables and 3 convenience views.
 
 ## Run the receiver
 

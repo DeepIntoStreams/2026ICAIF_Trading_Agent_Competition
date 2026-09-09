@@ -66,7 +66,8 @@ class DailyCompetitionService:
         instruments = connection.execute(
             """SELECT i.id, i.ticker, i.company_name, i.sector,
                       mb.open, mb.high, mb.low, mb.close,
-                      mb.adjusted_open, mb.adjusted_close, mb.volume
+                      mb.adjusted_open, mb.adjusted_close, mb.volume,
+                      mb.is_tradable, mb.verification_status
                  FROM instruments i
                  JOIN market_bars mb ON mb.instrument_id=i.id
                  WHERE i.is_active AND mb.trading_day_id=%s
@@ -97,6 +98,9 @@ class DailyCompetitionService:
         ticker_by_id = {int(row[0]): str(row[1]) for row in instruments}
         open_prices = {int(row[0]): row[8] for row in instruments}
         close_prices = {int(row[0]): row[9] for row in instruments}
+        tradable_instrument_ids = frozenset(
+            int(row[0]) for row in instruments if bool(row[11])
+        )
 
         self._set_processing(connection, day_id)
         processed_at = _now()
@@ -134,6 +138,7 @@ class DailyCompetitionService:
                 target_weights=prepared.target_weights,
                 open_prices=open_prices,
                 close_prices=close_prices,
+                tradable_instrument_ids=tradable_instrument_ids,
                 constraints=frozen_constraints,
                 initial_capital=initial_capital,
                 submitted=prepared.submitted,
@@ -153,7 +158,12 @@ class DailyCompetitionService:
             self._audit(connection, team_id, day_id, "EXECUTION_COMPLETED",
                         "execution", output.persistence_ids["execution_id"],
                         {"submission_id": prepared.submission_id,
-                         "source": prepared.source})
+                         "source": prepared.source,
+                         "non_tradable_tickers": [
+                             ticker_by_id[instrument_id]
+                             for instrument_id in instrument_ids
+                             if instrument_id not in tradable_instrument_ids
+                         ]})
             self._audit(connection, team_id, day_id, "OBSERVATION_PUBLISHED",
                         "observation", observation_id, {})
             counts["teams"] += 1

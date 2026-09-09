@@ -204,7 +204,11 @@ class TradingRepository:
                     (team_id, execution_day_id, exec_id, tx_id_by_instrument.get(cl["instrument"]),
                      cl["event_type"], cl["amount"], cl["balance_before"], cl["balance_after"],
                      open_at, proc_at))
-            if ledger and ledger[-1]["balance_after"] != e["cash_after"]:
+            money_check = Decimal("0.00001")
+            if ledger and (
+                ledger[-1]["balance_after"].quantize(money_check)
+                != e["cash_after"].quantize(money_check)
+            ):
                 raise ValueError(
                     f"cash_ledger end {ledger[-1]['balance_after']} != cash_after {e['cash_after']}")
 

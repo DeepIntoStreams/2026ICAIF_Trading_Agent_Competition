@@ -16,7 +16,7 @@ class ObservationService:
     def shared_panel(connection: Any, instruments: list[tuple[Any, ...]], trading_date: date,
                      deadline: datetime, constraints: dict[str, Any]) -> dict[str, Any]:
         assets = []
-        market_features: dict[str, dict[str, float]] = {}
+        market_features: dict[str, dict[str, Any]] = {}
         for row in instruments:
             _, ticker, company_name, sector = row[:4]
             assets.append({
@@ -24,6 +24,10 @@ class ObservationService:
                 "company_name": company_name,
                 "sector": sector or "",
                 "open_price": float(row[8]),
+                "is_tradable": bool(row[11]) if len(row) > 11 else True,
+                "verification_status": (
+                    str(row[12]) if len(row) > 12 else "LEGACY_UNVERIFIED"
+                ),
             })
             market_features[str(ticker)] = {
                 "open": float(row[4]),
@@ -33,6 +37,7 @@ class ObservationService:
                 "adjusted_open": float(row[8]),
                 "adjusted_close": float(row[9]),
                 "volume": float(row[10]),
+                "is_tradable": bool(row[11]) if len(row) > 11 else True,
             }
         # A normal live run occurs before tomorrow's decision deadline. Do not
         # expose a preloaded filing until it was actually public at generation

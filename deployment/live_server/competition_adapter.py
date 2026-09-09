@@ -28,6 +28,7 @@ class TeamDayInput:
     target_weights: dict[int, Decimal] | None
     open_prices: dict[int, Decimal]
     close_prices: dict[int, Decimal]
+    tradable_instrument_ids: frozenset[int]
     constraints: dict[str, Any]
     initial_capital: Decimal
     submitted: bool
@@ -58,8 +59,15 @@ class CompetitionAdapter:
             execution_day_id=value.execution_day_id,
             initial_capital=value.initial_capital,
         )
+        execution_weights = CompetitionAdapter._freeze_non_tradable_positions(
+            value.target_weights,
+            prior["state"],
+            value.open_prices,
+            value.instrument_ids,
+            value.tradable_instrument_ids,
+        )
         cycle = advance_day(
-            prior["state"], value.target_weights,
+            prior["state"], execution_weights,
             value.open_prices, value.close_prices,
             value.instrument_ids, value.constraints,
             observation_panel=value.observation_panel,
@@ -69,6 +77,10 @@ class CompetitionAdapter:
             initial_capital=value.initial_capital,
             pre_validated=True,
         )
+        cycle["record"]["non_tradable_instruments"] = [
+            instrument_id for instrument_id in value.instrument_ids
+            if instrument_id not in value.tradable_instrument_ids
+        ]
         ids = repository.persist_day(
             team_id=value.team_id,
             execution_day_id=value.execution_day_id,
@@ -101,6 +113,58 @@ class CompetitionAdapter:
         }
         observation["portfolio"] = portfolio
         return TeamDayOutput(cycle["record"], observation, ids)
+
+    @staticmethod
+    def _freeze_non_tradable_positions(
+        target_weights: dict[int, Decimal] | None,
+        state: dict[str, Any],
+        open_prices: dict[int, Decimal],
+        instrument_ids: list[int],
+        tradable_instrument_ids: frozenset[int],
+    ) -> dict[int, Decimal] | None:
+        """Translate a market halt into an executable target without core changes.
+
+        The core accepts target weights, so Deployment replaces each halted
+        instrument's requested target with the weight that reproduces its
+        current share quantity at the carried trusted open price. The original
+        participant vector remains unchanged in decision_submissions and
+        submission_weights.
+        """
+        if target_weights is None:
+            return None
+        non_tradable = [
+            instrument_id for instrument_id in instrument_ids
+            if instrument_id not in tradable_instrument_ids
+        ]
+        if not non_tradable:
+            return dict(target_weights)
+
+        cash = Decimal(str(state["cash"]))
+        shares = {
+            int(instrument_id): Decimal(str(quantity))
+            for instrument_id, quantity in (state.get("shares") or {}).items()
+        }
+        nav_open = cash + sum(
+            (
+                quantity * Decimal(str(open_prices[instrument_id]))
+                for instrument_id, quantity in shares.items()
+                if instrument_id in open_prices
+            ),
+            Decimal("0"),
+        )
+        if nav_open <= 0:
+            raise RuntimeError("cannot freeze a non-tradable position with non-positive NAV")
+
+        adjusted = dict(target_weights)
+        for instrument_id in non_tradable:
+            price = open_prices.get(instrument_id)
+            if price is None or Decimal(str(price)) <= 0:
+                raise RuntimeError(
+                    f"non-tradable instrument {instrument_id} has no valuation price"
+                )
+            quantity = shares.get(instrument_id, Decimal("0"))
+            adjusted[instrument_id] = quantity * Decimal(str(price)) / nav_open
+        return adjusted
 
     @staticmethod
     def compute_leaderboard(
