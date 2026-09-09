@@ -201,7 +201,15 @@ def settle_open(state: dict[str, Any], target_weights: Any, open_prices: dict[st
         fee = traded * fee_rate
         invested = sum((sh * px[t] for t, sh in new_shares.items() if t in px), _D(0))
         cash_after = nav_open - invested - fee
-        new_shares = {t: sh for t, sh in new_shares.items() if abs(sh) > _D("1e-12")}
+        if cash_after < 0:
+            # Infeasible: the fill would overdraw cash (a fully-invested book can't cover the fee).
+            # Reject the whole fill and HOLD - reject-not-repair, so weights are never rescaled. This
+            # is an EXECUTION-time check (the fee depends on turnover, unknown at receipt). It leaves
+            # `violations` empty, so it does NOT count toward M9; it just holds like a no-trade day.
+            weights, traded, fee, cash_after = None, _D(0), _D(0), cash_before
+            new_shares = dict(shares)
+        else:
+            new_shares = {t: sh for t, sh in new_shares.items() if abs(sh) > _D("1e-12")}
 
     # Per-instrument trades (shares_before -> new_shares); fee split pro-rata by notional so the
     # individual fees reconcile to the total, and the cash_change values sum to the cash delta.
@@ -486,9 +494,18 @@ class TradingEpisode:
                 "target_weights": r["weights"] or {}, "violations": r["violations"]}
 
     def result(self) -> dict[str, Any]:
-        """M1-M9 for the completed episode (metrics computed in float from the NAV series)."""
+        """M1-M9 for the completed episode (metrics computed in float from the NAV series).
+
+        The equity curve starts at the INITIAL CAPITAL: `compute_metrics` measures cumulative
+        return as values[-1]/values[0], so seeding the baseline makes M1 the true return from the
+        starting capital and lets day 1's return count toward the risk metrics. Without it the
+        curve began at day 1's close and that first day was silently dropped. This matches the
+        live board (`trading_repo.compute_and_store_leaderboard`), so validation and official
+        scoring are computed the same way.
+        """
         return compute_metrics(
-            [float(v) for v in self.nav_series], initial_capital=float(self.initial_capital),
+            [float(self.initial_capital)] + [float(v) for v in self.nav_series],
+            initial_capital=float(self.initial_capital),
             total_transaction_cost=float(self.total_cost), total_trade_value=float(self.total_traded),
             violation_steps=self.violation_days, decision_steps=len(self.dates))
 
@@ -613,9 +630,22 @@ def leaderboard(out_dir: str, method: str = "dimension") -> list[dict[str, Any]]
     results_dir = Path(out_dir) / "results"
     teams = [json.loads(p.read_text()) for p in results_dir.glob("*.json")
              if p.name != "leaderboard.json"]     # never re-ingest our own output
+    board = rank_board(teams, method=method)
+    if board:
+        (results_dir / "leaderboard.json").write_text(json.dumps(board, indent=2, default=str))
+    return board
+
+
+def rank_board(teams: list[dict[str, Any]], method: str = "dimension") -> list[dict[str, Any]]:
+    """Pure ranking step: [{team_id, metrics}, ...] -> the ranked board (lower avg_rank wins).
+
+    Shared by the file-based `leaderboard()` (offline replay) and the database leaderboard
+    (`trading_repo.compute_and_store_leaderboard`), so the live board and the backtest board are
+    ranked by exactly the same rule. Adds an explicit 1-based `rank` to each entry.
+    """
     if not teams:
         return []
-    ranks = {t["team_id"]: {} for t in teams}
+    ranks: dict[Any, dict[str, int]] = {t["team_id"]: {} for t in teams}
     for key, higher in _HIGHER_BETTER.items():
         vals = {t["team_id"]: (t["metrics"].get(key) if t["metrics"].get(key) is not None
                                else (-1e9 if higher else 1e9)) for t in teams}
@@ -633,11 +663,13 @@ def leaderboard(out_dir: str, method: str = "dimension") -> list[dict[str, Any]]
         else:
             avg = sum(dim_scores.values()) / len(_DIMENSIONS)
         board.append({"team_id": tid, "avg_rank": round(avg, 4), "method": method,
-                      "m1_cumulative_return": t["metrics"]["m1_cumulative_return"],
-                      "m5_maximum_drawdown": t["metrics"]["m5_maximum_drawdown"],
+                      "metrics": t["metrics"],
+                      "m1_cumulative_return": t["metrics"].get("m1_cumulative_return"),
+                      "m5_maximum_drawdown": t["metrics"].get("m5_maximum_drawdown"),
                       "dimension_scores": {d: round(s, 4) for d, s in dim_scores.items()},
                       "ranks": r})
-    board.sort(key=lambda x: (x["avg_rank"], -x["m1_cumulative_return"],
-                              x["m5_maximum_drawdown"], x["team_id"]))
-    (results_dir / "leaderboard.json").write_text(json.dumps(board, indent=2, default=str))
+    board.sort(key=lambda x: (x["avg_rank"], -(x["m1_cumulative_return"] or 0.0),
+                              (x["m5_maximum_drawdown"] or 0.0), x["team_id"]))
+    for position, entry in enumerate(board, 1):
+        entry["rank"] = position
     return board
