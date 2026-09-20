@@ -143,6 +143,10 @@ def validate_payload(payload, filename, *, allow_placeholders=False, submitted_a
         _text(payload['team_name'], 'team_name')
         _email(payload['contact_email'])
         _members(payload['team_members'])
+        if submitted_at is not None:
+            config = load_config()
+            if not timestamp(config['registration_start']) <= timestamp(submitted_at) < timestamp(config['registration_end']):
+                raise SubmissionError('Registration upload time must be on or after its opening and strictly before its closing.')
     else:
         _text(payload['team_id'], 'team_id')
         _text(payload['team_token'], 'team_token')

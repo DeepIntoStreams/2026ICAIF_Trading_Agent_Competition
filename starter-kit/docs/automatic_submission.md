@@ -14,7 +14,7 @@ Types are `register`, `decision`, `final_submission`. Each member contains exact
 
 `CODABENCH_TOKEN` is your personal platform API token. Platform upload and native submission reads use `Authorization: Token ...`. Gateway private GET uses that platform token plus `X-ICAIF-Team-Token`. A separately published backend uses only `Authorization: Bearer TEAM_TOKEN`; no personal platform token is sent there or to signed storage URLs. Redirects are refused.
 
-Registration saves `team_id` and one-time `team_token` in `.icaif/credentials.json` before returning a redacted receipt. Existing manual registrations or an audited organizer token reset can be imported from your local environment:
+Registration saves `team_id` and one-time `team_token` in `.icaif/credentials.json` before returning a redacted receipt. Existing manual registrations or original credentials recovered through the organizer's audited process can be imported from your local environment:
 
 ```sh
 python tools/auto_submit.py import-credentials
@@ -42,7 +42,9 @@ All global flags precede the command. `--profile` may be omitted if `ICAIF_PROFI
 
 ## Calendar and slots
 
-The preserved normal calendar has 14 Validation rounds on October 8–9 and 105 Official rounds on October 12–30. ET deadlines are 09:10, 10:25, 11:25, 12:25, 13:25, 14:25, 15:25. The first round opens at local midnight; later rounds open at the prior deadline. Upload eligibility is `opens_at <= server time < deadline`; Final deadline is inclusive. Execution times and 16:00 valuation are separate from upload deadlines.
+Registration opens September 20 at 00:00 ET. Upload before October 8 at 00:00 ET to enter Validation and Official; registration from then until the exclusive October 12 at 00:00 ET cutoff enters Official only. The normal calendar has 14 Validation rounds on October 8–9 and 105 Official rounds on October 12–30.
+
+ET deadlines are 09:10, 10:25, 11:25, 12:25, 13:25, 14:25 and 15:25. Round 1 normally opens at 15:40 ET on the previous trading day; Rounds 2–7 open at 09:40, 10:40, 11:40, 12:40, 13:40 and 14:40. Upload eligibility is `opens_at <= server time < deadline`; a deadline-to-next-opening gap is late for the preceding round. Execution times and the 16:00 valuation are separate from upload deadlines. Final opens October 30 at 16:00 ET and closes inclusively at November 3 at 23:59:00 ET.
 
 Watch reads the live schedule and server clock, including organizer cancellations. It uses portfolio and the current round's private state as strategy inputs; it supplies no invented market data. You must obtain legitimate data in your strategy. Always follow the dates returned by the live Competition 99 schedule.
 
@@ -59,7 +61,7 @@ Safe GETs and replay of identical bytes to the same newly allocated storage obje
 - To attach a verified ID explicitly: `python tools/auto_submit.py resolve --operation registration --submission-id ID`. Decision keys are `decision:<phase>:<round_id>`; Final uses `final_submission`.
 - Dataset-allocation ambiguity is stopped before any automatic submission retry. Ask the organizer to resolve the allocated object/checkpoint. An orphan dataset does not itself consume a round.
 - Failed or pending worker execution uses the same original ID. `fetch` is read-only. Organizers can recover workers without asking for a new submission.
-- Registration repeated with another upload cannot retrieve a new team token. Keep the first private result/credential file; if lost, request the audited organizer reset.
+- Registration repeated with another upload cannot retrieve a new team token. Keep the first private result/credential file; if lost, contact the organizer from the registered email for audited retrieval of the original token.
 
 The trusted gateway receipt contract is `GET /extensions/icaif2026/<competition_id>/submissions/<id>/receipt`, with `submission_id`, `owner_username`, `phase_id`, `file_name`, raw `sha256`, `status`, and optional private `result`. Native `/api/my_profile/` supplies the authenticated username. Both native phase/owner and gateway immutable metadata are checked before downloading private output or attaching a pending ID.
 

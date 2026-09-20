@@ -4,11 +4,15 @@ This kit supports the complete Registration → Validation → Official → Fina
 
 The included `profiles/profile99-production.json` points to the live Competition 99 unified phase. Keep credentials and checkpoints private; this repository contains no team token or Codabench account token.
 
+## Key dates and registration eligibility
+
+All dates and times use US Eastern Time. Registration opens on **September 20 at 00:00 ET**. Upload before **October 8 at 00:00 ET** to enter both Validation and Official. Registration remains open for Official only until the exclusive server cutoff of **October 12 at 00:00 ET**, equivalent to the published October 11, 11:59 PM deadline. Validation runs October 8–9, Official runs October 12–30, Final materials are accepted from October 30 at 16:00 through **November 3 at 23:59:00 inclusive**, and the winner announcement is November 10.
+
 ## Manual upload files
 
 The kit root contains the exact three filenames accepted by Competition 99:
 
-- `register.json`: replace the team name, captain email, and member details, then upload it during Registration.
+- `register.json`: replace the team name, captain email, and member details, then upload it during the registration window. Every listed member must have an active Codabench account with the same unique email; an account cannot belong to another registered team.
 - `decision.json`: after Registration, replace `team_id` and `team_token`, select the current `phase` and `round_id` from the live schedule, update all 30 target weights, then upload it inside that round's window.
 - `final_submission.json`: replace the same team credential, complete member list, HTTPS shared-materials link, and exact file inventory before the Final deadline.
 
@@ -65,7 +69,7 @@ python tools/auto_submit.py final --file private/final_submission.json
 python tools/auto_submit.py fetch --submission-id YOUR_ORIGINAL_FINAL_ID
 ```
 
-Final is explicit and one accepted material record cannot be overwritten. The client does not download or execute your materials, generate pretend files, or automatically submit Final. The original inclusive deadline is November 3, 2026, 23:59 ET. A pending or frozen scorer receipt is not public score release: final scores wait for organizer review, complete inventory, freeze, same-ID re-score, verification, backend publication and separate platform reveal. Official private metrics remain gated by the server until publication; portfolio/ledger accounting stays available.
+Final is explicit and the earliest attributable in-window attempt consumes the team's only Final slot even when invalid. An out-of-window attempt consumes no slot. The client does not download or execute your materials, generate pretend files, or automatically submit Final. The inclusive deadline is November 3, 2026, 23:59:00 ET. A pending or frozen scorer receipt is not public score release: final scores wait for complete inventory, organizer review, freeze, same-ID re-score, verification, backend publication and separate platform reveal. Official private metrics remain gated by the server until publication; portfolio/ledger accounting stays available.
 
 ## Recovery and reference
 

@@ -19,17 +19,17 @@ The announced universe has five stocks in each of six groups: Technology, Financ
 
 All times are U.S. Eastern Time using `America/New_York`.
 
-| Round | Submission deadline | Execution |
-| --- | --- | --- |
-| 1 | 09:10 | 09:30 market open |
-| 2 | 10:25 | 10:30 hourly open |
-| 3 | 11:25 | 11:30 hourly open |
-| 4 | 12:25 | 12:30 hourly open |
-| 5 | 13:25 | 13:30 hourly open |
-| 6 | 14:25 | 14:30 hourly open |
-| 7 | 15:25 | 15:30 hourly open |
+| Round | Window opens | Submission deadline | Execution |
+| --- | --- | --- | --- |
+| 1 | Previous trading day's last active execution + 10 min; normally 15:40 | 09:10 | 09:30 market open |
+| 2 | 09:40 | 10:25 | 10:30 hourly open |
+| 3 | 10:40 | 11:25 | 11:30 hourly open |
+| 4 | 11:40 | 12:25 | 12:30 hourly open |
+| 5 | 12:40 | 13:25 | 13:30 hourly open |
+| 6 | 13:40 | 14:25 | 14:30 hourly open |
+| 7 | 14:40 | 15:25 | 15:30 hourly open |
 
-Decision deadlines are exclusive: the authoritative platform upload time must be earlier than the deadline, and an upload exactly at it is late. The Round 2 window opens at 09:10 when Round 1 closes; each later intraday window opens at the preceding deadline. The 16:00 official market close is a valuation only, with no submission or rebalance.
+Decision windows include their opening and exclude their deadline. The authoritative platform upload time determines eligibility, regardless of worker delay. A deadline-to-next-opening gap is late for the preceding round. The earliest attributable attempt within a window consumes the round even if invalid; later attempts cannot replace it. The 16:00 official market close is a valuation only, with no submission or rebalance.
 
 Round 7 holdings continue overnight until the next trading day's Round 1 execution boundary. On the last day of a phase, the final period ends at the official close. On an early-close day, rounds whose execution time is at or after the adjusted close are cancelled and the last executed portfolio is valued at that close. Check `../schedule.json` and the live schedule before every submission.
 
@@ -37,11 +37,14 @@ Round 7 holdings continue overnight until the next trading day's Round 1 executi
 
 | Phase | Current configured dates | Purpose |
 | --- | --- | --- |
-| Registration | Before Official opens | Create the team and receive credentials |
+| Registration & Development | September 20, 00:00 ET through October 8, 00:00 ET exclusive | Create the team in time for Validation and Official |
 | Live Validation | October 8–9, 2026 | Two-day, 14-round rehearsal with a separate portfolio |
+| Official registration only | October 8, 00:00 ET through October 12, 00:00 ET exclusive | Create the team for Official; Validation is no longer available |
 | Official Competition | October 12–30, 2026 | Fifteen trading days and normally 105 decision rounds |
-| Final Submission | After the final Official close through November 3, 2026 at 23:59 ET | Submit reproduction materials for review |
+| Final Submission | October 30, 16:00 ET through November 3, 2026 at 23:59:00 ET inclusive | Submit reproduction materials once for review |
 
 Cancelled rounds are excluded from evaluation-period counts. The configured Final Submission boundary is inclusive at exactly `2026-11-03T23:59:00-05:00`; this exception does not change the exclusive decision deadlines.
+
+Registration and final uploads outside their windows are ignored with `EARLY` or `LATE` and consume no slot. For final materials, the earliest attributable in-window attempt consumes the only slot even if invalid. There are no replacement finals. Selection waits for the complete platform upload inventory, followed by manual review of valid selected materials, frozen rankings, rerunning the original submission, score verification and organizer release.
 
 Participants obtain their own permitted inputs. This kit contains synthetic prices only and does not fetch or provide a live market feed. The allowed LLM and external-data policy, including disclosure duties, is in `llm_and_external_data.md`.

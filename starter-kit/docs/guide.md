@@ -24,11 +24,13 @@ python tools/validate_submission.py examples/registration/register.json --allow-
 
 Edit `examples/registration/register.json` with the team name, contact email, and every member's name, email, and institution. Validate it without `--allow-placeholders`, then upload the single UTF-8 file named `register.json` to the Registration phase:
 
+The platform upload must fall in **September 20, 2026 at 00:00 ET through October 12 at 00:00 ET exclusive**. Upload before **October 8 at 00:00 ET** to enter both Validation and Official; a later timely registration enters Official only. A timely upload remains timely if a worker processes it later. Outside-window uploads return `EARLY` or `LATE` and do not register a team. Add `--submitted-at` to check a proposed upload time locally.
+
 ```console
 python tools/validate_submission.py examples/registration/register.json
 ```
 
-The private detailed result shows the `team_id` and team token once. Save both in `.env`; do not place the token in source control, screenshots, logs, shared materials, or a public result. A registration rerun does not reveal it again. A lost token requires an organizer reset.
+The private detailed result shows the `team_id` and team token once. Save both in `.env`; do not place the token in source control, screenshots, logs, shared materials, or a public result. A registration rerun does not reveal it again. If lost, contact the organizer from the registered email for identity verification and retrieval of the **original token**. It is not reset.
 
 ## 2. Run the Validation cycle
 
@@ -49,7 +51,7 @@ python tools/prepare_submission.py examples/validation/decision.json --output ou
 python tools/validate_submission.py output/validation-2026-10-08-r1/decision.json --submitted-at 2026-10-08T09:09:00-04:00 --schedule schedule.json
 ```
 
-The platform upload timestamp decides timeliness. For a round, the earliest uploaded attempt by platform timestamp and sequence consumes the slot even if it is invalid; later attempts are duplicates. Platform processing may be delayed, so a receipt can remain pending before selection or execution. Never rely on a second upload to correct the first.
+The platform upload timestamp decides timeliness. A window opens 10 minutes after the preceding execution: normally 15:40 on the previous trading day for Round 1, then 09:40, 10:40, 11:40, 12:40, 13:40 and 14:40 ET for Rounds 2–7. Upload before its exclusive deadline. Between a deadline and the next window opening, an upload is late for the preceding round. Within a window, the earliest attributable attempt by platform timestamp and sequence consumes the slot even if invalid; later attempts are duplicates. A receipt can remain pending while platform processing completes. Never rely on a second upload to correct the first.
 
 When the participant API is available, `schedule` and `check` use public configuration; the other commands read private state with `TEAM_TOKEN`. Add `--base-url` to override `TRADING_API_BASE_URL` or `--output FILE` to save JSON.
 
@@ -79,14 +81,16 @@ Official metrics remain unavailable through the private metrics API until all Of
 
 ## 4. Submit final materials
 
-Final submission opens after the last Official close. Prepare the shared reproduction folder using `examples/final/README.md` and `examples/final/disclosures.md`. Edit the final template so its member list is complete, its `materials_url` is an HTTPS link accessible to organizers, and its `materials` list exactly describes the shared files.
+Final submission opens **at the last scheduled Official close, October 30 at 16:00 ET**. Prepare the shared reproduction folder using `examples/final/README.md` and `examples/final/disclosures.md`. Edit the final template so its member list is complete, its `materials_url` is an HTTPS link accessible to organizers, and its `materials` list exactly describes the shared files.
 
 ```console
 python tools/prepare_submission.py examples/final/final_submission.json --output output/final/final_submission.json
 python tools/validate_submission.py output/final/final_submission.json
 ```
 
-Upload the single file named `final_submission.json` to the Final Submission phase. The deadline is `2026-11-03T23:59:00-05:00`; unlike decision deadlines, that exact platform timestamp is accepted. The first response is normally `PENDING_REVIEW`. Official scores appear after organizer review and publication; no extra upload is needed while review is pending.
+Upload the single file named `final_submission.json` to the Final Submission phase. The deadline is `2026-11-03T23:59:00-05:00`; that exact platform timestamp is accepted. Outside-window uploads return `EARLY` or `LATE` and consume no final slot. The earliest attributable **in-window attempt consumes your only final slot even if invalid**; later uploads cannot replace it.
+
+The initial response is normally `PENDING_SELECTION`. After the platform's complete upload inventory is reconciled, the earliest attempt becomes `PENDING_REVIEW` if valid or `INVALID` if malformed; later attempts become `DUPLICATE`. Organizers review the selected materials, freeze eligible teams and ranks, rerun the **same original Codabench submission**, verify stored scores and reveal the leaderboard. Approval or `PUBLISHED_READY` alone does not mean the public leaderboard is visible. Do not submit another file while selection or review is pending.
 
 You can reproduce metrics from the synthetic example or from a metrics API response saved as JSON:
 

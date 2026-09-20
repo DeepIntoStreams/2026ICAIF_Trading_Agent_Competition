@@ -12,7 +12,9 @@
 | `decision.json` | `decision` | TEAM_ID、TEAM_TOKEN、phase、round_id、全量 30 股 weights |
 | `final_submission.json` | `final_submission` | TEAM_ID、TEAM_TOKEN、全部成员、真实 HTTPS 材料地址、实际文件名清单 |
 
-注册回执中的 TEAM_TOKEN 只首次发放。客户端先将它与 TEAM_ID 原子保存到 `.icaif/credentials.json`（0600），再输出脱敏回执。个人平台 Token 只用于平台认证，不能代替 decision/Final 中的团队凭据。已有注册或经主办方审计重置的凭据，可在私有环境设置 TEAM_ID/TEAM_TOKEN 后执行 `import-credentials` 导入；该命令不联网、不打印令牌。
+注册回执中的 TEAM_TOKEN 只首次发放。客户端先将它与 TEAM_ID 原子保存到 `.icaif/credentials.json`（0600），再输出脱敏回执。个人平台 Token 只用于平台认证，不能代替 decision/Final 中的团队凭据。已有注册或由主办方审计找回的原凭据，可在私有环境设置 TEAM_ID/TEAM_TOKEN 后执行 `import-credentials` 导入；该命令不联网、不打印令牌。
+
+注册从 9 月 20 日 00:00 ET 开始。10 月 8 日 00:00 ET 前上传可进入 Validation 与 Official；此后至 10 月 12 日 00:00 ET（不含）之间注册只能进入 Official。Validation 为 10 月 8–9 日，Official 为 10 月 12–30 日。
 
 ```sh
 python tools/auto_submit.py register --file private/register.json
@@ -24,7 +26,7 @@ python tools/auto_submit.py decisions --phase validation
 python tools/auto_submit.py metrics --phase validation
 ```
 
-所有查询都是 GET，不上传 status/observation/result 探测文件。首次可归属的轮内上传即使无效也占用该轮，后续上传不能补正。未提交时持仓延续；全零权重按原规则清仓。原始截止时刻 ET 为 09:10、10:25、11:25、12:25、13:25、14:25、15:25；交易轮截止不含等于时刻。以服务器发布的日程与时间为准。旧 round_id 的文件恰在它的截止时刻到达属于 LATE，不占用下一轮；客户端会在上传前拒绝该过期文件。后端明确标记 NOT_ELIGIBLE 的轮外记录不会阻止该轮之后的合法首投。
+所有查询都是 GET，不上传 status/observation/result 探测文件。首次可归属的轮内上传即使无效也占用该轮，后续上传不能补正。未提交时持仓延续；全零权重按原规则清仓。截止时刻 ET 为 09:10、10:25、11:25、12:25、13:25、14:25、15:25；Round 1 通常从前一交易日 15:40 开放，Round 2–7 分别从 09:40、10:40、11:40、12:40、13:40、14:40 开放。窗口包含开始、不包含截止；截止至下一窗口开始之间的上传属于上一轮 LATE。以服务器发布的日程与时间为准。旧 round_id 的文件恰在它的截止时刻到达属于 LATE，不占用下一轮；客户端会在上传前拒绝该过期文件。后端明确标记 NOT_ELIGIBLE 的轮外记录不会阻止该轮之后的合法首投。
 
 策略在参赛者本机运行，只接收当前轮、30 股代码、服务器时间和本人仓位/回合状态；合法市场数据由你的策略自行提供。本包不会把合成价格冒充真实行情。示例 `examples/automation/file_strategy.py` 只读取你自己计算、且明确标注当前 round_id 的权重文件：
 
@@ -51,6 +53,6 @@ python tools/auto_submit.py final --file private/final_submission.json
 python tools/auto_submit.py fetch --submission-id 原Final提交ID
 ```
 
-一个被接受的 Final 材料记录不能覆盖。原始 Final 截止为 2026-11-03 23:59 ET，等于截止时刻仍可提交。`PENDING_REVIEW` 表示待审，`PUBLISHED_READY` 冻结回执也不能单独证明榜单已公开。正式成绩要等主办方审核、库存封存、冻结、原 ID 重评分、实际平台值核验、后端发布，以及独立的平台榜单公开操作。Official 指标由服务器在发布前限制读取；现金/NAV/盈亏账本可以保持可见。
+Final 窗口从 2026-10-30 16:00 ET 开始，到 2026-11-03 23:59:00 ET（含）结束。轮外上传不占名额；窗口内首次可归属尝试即使无效也占用唯一名额，不能覆盖。`PENDING_SELECTION` 表示等待完整平台清单，选中且有效后才进入 `PENDING_REVIEW`。`PUBLISHED_READY` 冻结回执也不能单独证明榜单已公开。正式成绩要等库存封存、主办方审核、冻结、原 ID 重评分、实际平台值核验、后端发布，以及独立的平台榜单公开操作。Official 指标由服务器在发布前限制读取；现金/NAV/盈亏账本可以保持可见。
 
 原本地校验、准备、评估工具与算法保持原字节不变。原示例合成数据只用于离线演示。本地指标、Validation 私有指标均不等于最终公开 Score。全部命令、恢复细节、Python API 见 [英文详细说明](automatic_submission.md)。
