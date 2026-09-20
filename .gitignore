@@ -221,7 +221,15 @@ __marimo__/
 models/
 private_audit/
 results/
-data/
+# Local datasets and database state are private/generated. Keep the database
+# contract, schema, and bootstrap tooling versioned so every developer can
+# create an identical local database.
+data/*
+!data/README.md
+!data/database/
+!data/database/**
+data/datasets/
+data/imports/
 outputs/
 tests/
 docs/

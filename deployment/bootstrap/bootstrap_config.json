@@ -1,0 +1,48 @@
+{
+  "calendar": "XNYS",
+  "initial_capital_usd": "1000000.00",
+  "constraints": {
+    "long_only": true,
+    "max_asset_weight": 0.10,
+    "max_gross_exposure": 1.00,
+    "fee_rate": 0.001,
+    "slippage_bps": 0.0
+  },
+  "instruments": [
+    {"ticker": "AAPL", "company_name": "Apple Inc.", "sector": "Technology"},
+    {"ticker": "MSFT", "company_name": "Microsoft Corporation", "sector": "Technology"},
+    {"ticker": "NVDA", "company_name": "NVIDIA Corporation", "sector": "Technology"},
+    {"ticker": "INTC", "company_name": "Intel Corporation", "sector": "Technology"},
+    {"ticker": "CRM", "company_name": "Salesforce, Inc.", "sector": "Technology"},
+
+    {"ticker": "JPM", "company_name": "JPMorgan Chase & Co.", "sector": "Finance"},
+    {"ticker": "BAC", "company_name": "Bank of America Corporation", "sector": "Finance"},
+    {"ticker": "GS", "company_name": "The Goldman Sachs Group, Inc.", "sector": "Finance"},
+    {"ticker": "V", "company_name": "Visa Inc.", "sector": "Finance"},
+    {"ticker": "PYPL", "company_name": "PayPal Holdings, Inc.", "sector": "Finance"},
+
+    {"ticker": "LLY", "company_name": "Eli Lilly and Company", "sector": "Healthcare"},
+    {"ticker": "JNJ", "company_name": "Johnson & Johnson", "sector": "Healthcare"},
+    {"ticker": "UNH", "company_name": "UnitedHealth Group Incorporated", "sector": "Healthcare"},
+    {"ticker": "PFE", "company_name": "Pfizer Inc.", "sector": "Healthcare"},
+    {"ticker": "TMO", "company_name": "Thermo Fisher Scientific Inc.", "sector": "Healthcare"},
+
+    {"ticker": "AMZN", "company_name": "Amazon.com, Inc.", "sector": "Consumer"},
+    {"ticker": "TSLA", "company_name": "Tesla, Inc.", "sector": "Consumer"},
+    {"ticker": "WMT", "company_name": "Walmart Inc.", "sector": "Consumer"},
+    {"ticker": "NKE", "company_name": "NIKE, Inc.", "sector": "Consumer"},
+    {"ticker": "KO", "company_name": "The Coca-Cola Company", "sector": "Consumer"},
+
+    {"ticker": "CAT", "company_name": "Caterpillar Inc.", "sector": "Industrial & Energy"},
+    {"ticker": "GE", "company_name": "GE Aerospace", "sector": "Industrial & Energy"},
+    {"ticker": "BA", "company_name": "The Boeing Company", "sector": "Industrial & Energy"},
+    {"ticker": "XOM", "company_name": "Exxon Mobil Corporation", "sector": "Industrial & Energy"},
+    {"ticker": "CVX", "company_name": "Chevron Corporation", "sector": "Industrial & Energy"},
+
+    {"ticker": "GOOGL", "company_name": "Alphabet Inc. Class A", "sector": "Communication & Utilities"},
+    {"ticker": "META", "company_name": "Meta Platforms, Inc.", "sector": "Communication & Utilities"},
+    {"ticker": "DIS", "company_name": "The Walt Disney Company", "sector": "Communication & Utilities"},
+    {"ticker": "T", "company_name": "AT&T Inc.", "sector": "Communication & Utilities"},
+    {"ticker": "NEE", "company_name": "NextEra Energy, Inc.", "sector": "Communication & Utilities"}
+  ]
+}
