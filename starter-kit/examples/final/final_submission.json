@@ -1,0 +1,19 @@
+{
+  "submission_type": "final_submission",
+  "team_id": "REPLACE_TEAM_ID",
+  "team_token": "REPLACE_TEAM_TOKEN",
+  "team_members": [
+    {
+      "name": "REPLACE_MEMBER_NAME",
+      "email": "REPLACE_MEMBER_EMAIL@example.org",
+      "institution": "REPLACE_INSTITUTION"
+    }
+  ],
+  "materials_url": "https://drive.google.com/drive/folders/REPLACE_SHARED_FOLDER_ID",
+  "materials": [
+    "video.mp4",
+    "source.zip",
+    "README.md",
+    "disclosures.md"
+  ]
+}

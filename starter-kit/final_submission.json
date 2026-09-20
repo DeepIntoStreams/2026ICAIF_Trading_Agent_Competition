@@ -1,0 +1,20 @@
+{
+  "submission_type": "final_submission",
+  "team_id": "00000000-0000-4000-8000-000000000000",
+  "team_token": "REPLACE_WITH_TEAM_TOKEN_FROM_REGISTRATION",
+  "team_members": [
+    {
+      "name": "Team Captain Name",
+      "email": "captain@example.com",
+      "institution": "Your Institution"
+    }
+  ],
+  "materials_url": "https://example.com/your-team-materials",
+  "materials": [
+    "video.mp4",
+    "source.zip",
+    "README.md",
+    "requirements.txt",
+    "disclosures.md"
+  ]
+}

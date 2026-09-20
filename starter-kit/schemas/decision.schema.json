@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "title": "Trading decision for the official 30-stock universe",
+  "description": "Validate exact decimals locally. Total weight must be <= 1 + 1e-10; the backend corrects tolerated excess. All symbols are mandatory. Round windows require the selected schedule.",
+  "required": [
+    "submission_type",
+    "team_id",
+    "team_token",
+    "phase",
+    "round_id",
+    "weights"
+  ],
+  "properties": {
+    "submission_type": {
+      "const": "decision"
+    },
+    "team_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "\\S"
+    },
+    "team_token": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "\\S",
+      "writeOnly": true
+    },
+    "phase": {
+      "enum": [
+        "validation",
+        "official"
+      ]
+    },
+    "round_id": {
+      "type": "string",
+      "maxLength": 80,
+      "pattern": "^(validation|official)-[0-9]{4}-[0-9]{2}-[0-9]{2}-r[1-7]$"
+    },
+    "weights": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 30,
+      "maxProperties": 30,
+      "required": [
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "INTC",
+        "CRM",
+        "JPM",
+        "BAC",
+        "GS",
+        "V",
+        "PYPL",
+        "LLY",
+        "JNJ",
+        "UNH",
+        "PFE",
+        "TMO",
+        "AMZN",
+        "TSLA",
+        "WMT",
+        "NKE",
+        "KO",
+        "CAT",
+        "GE",
+        "BA",
+        "XOM",
+        "CVX",
+        "GOOGL",
+        "META",
+        "DIS",
+        "T",
+        "NEE"
+      ],
+      "properties": {
+        "AAPL": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "MSFT": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "NVDA": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "INTC": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "CRM": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "JPM": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "BAC": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "GS": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "V": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "PYPL": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "LLY": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "JNJ": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "UNH": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "PFE": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "TMO": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "AMZN": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "TSLA": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "WMT": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "NKE": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "KO": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "CAT": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "GE": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "BA": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "XOM": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "CVX": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "GOOGL": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "META": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "DIS": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "T": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        },
+        "NEE": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.3
+        }
+      }
+    }
+  }
+}

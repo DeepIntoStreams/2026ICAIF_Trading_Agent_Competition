@@ -1,0 +1,9 @@
+{
+  "calculation_version": "decision-period-sharpe1764-turnover-mean-shared-ties-decimal40-v2",
+  "metrics": {
+    "cumulative_return": "-0.01",
+    "sharpe_ratio": "0",
+    "maximum_drawdown": "0.2",
+    "turnover": "0.4"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "backend_base_url": "https://hackathon2.deepintomlf.ai/extensions/icaif2026/99/backend",
+  "base_url": "https://hackathon2.deepintomlf.ai",
+  "competition_id": 99,
+  "label": "ACM ICAIF 2026 production \u2014 official calendar",
+  "phases": {
+    "final_submission": 120,
+    "official": 120,
+    "registration": 120,
+    "validation": 120
+  },
+  "tasks": null,
+  "test_mode": false
+}

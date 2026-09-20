@@ -1,0 +1,9 @@
+{
+  "description": "Synthetic two-period arithmetic example, not a complete competition or real market data.",
+  "initial_nav": "1000000",
+  "periods": [
+    {"nav_before": "1000000", "nav_after_period": "900000", "traded_notional": "300000"},
+    {"nav_before": "900000", "nav_after_period": "990000", "traded_notional": "450000"}
+  ],
+  "valuation_points": ["1000000", "900000", "800000", "990000"]
+}

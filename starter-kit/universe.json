@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "competition": "ICAIF 2026 Trading Agent Competition",
+  "status": "organizer_supplied",
+  "sectors": {
+    "Technology": ["AAPL", "MSFT", "NVDA", "INTC", "CRM"],
+    "Finance": ["JPM", "BAC", "GS", "V", "PYPL"],
+    "Healthcare": ["LLY", "JNJ", "UNH", "PFE", "TMO"],
+    "Consumer": ["AMZN", "TSLA", "WMT", "NKE", "KO"],
+    "Industrial & Energy": ["CAT", "GE", "BA", "XOM", "CVX"],
+    "Communication & Utilities": ["GOOGL", "META", "DIS", "T", "NEE"]
+  }
+}

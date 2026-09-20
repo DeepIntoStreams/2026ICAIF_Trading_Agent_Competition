@@ -1,0 +1,12 @@
+{
+  "submission_type": "register",
+  "team_name": "REPLACE_TEAM_NAME",
+  "team_members": [
+    {
+      "name": "REPLACE_MEMBER_NAME",
+      "email": "REPLACE_MEMBER_EMAIL@example.org",
+      "institution": "REPLACE_INSTITUTION"
+    }
+  ],
+  "contact_email": "REPLACE_CONTACT_EMAIL@example.org"
+}

@@ -1,0 +1,19 @@
+{
+  "kit_version": "1.0.0",
+  "timezone": "America/New_York",
+  "phase_dates": {
+    "validation": ["2026-10-08", "2026-10-09"],
+    "official": ["2026-10-12", "2026-10-30"]
+  },
+  "round_deadlines_et": ["09:10", "10:25", "11:25", "12:25", "13:25", "14:25", "15:25"],
+  "round_execution_times_et": ["09:30", "10:30", "11:30", "12:30", "13:30", "14:30", "15:30"],
+  "regular_close_et": "16:00",
+  "final_deadline": "2026-11-03T23:59:00-05:00",
+  "services": {
+    "api_base_url": null,
+    "codabench_competition_url": "https://hackathon2.deepintomlf.ai/competitions/99/",
+    "support_contact": null,
+    "api_credit_application_url": null,
+    "api_credit_application_period": null
+  }
+}

@@ -1,0 +1,9 @@
+.env
+.icaif/
+private/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.lock
+*.schedule.json

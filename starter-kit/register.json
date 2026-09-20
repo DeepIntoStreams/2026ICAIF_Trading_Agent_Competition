@@ -1,0 +1,12 @@
+{
+  "submission_type": "register",
+  "team_name": "Your Team Name",
+  "contact_email": "captain@example.com",
+  "team_members": [
+    {
+      "name": "Team Captain Name",
+      "email": "captain@example.com",
+      "institution": "Your Institution"
+    }
+  ]
+}
