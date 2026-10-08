@@ -9,6 +9,6 @@
     "registration": 120,
     "validation": 120
   },
-  "tasks": null,
+  "tasks": [122],
   "test_mode": false
 }
